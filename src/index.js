@@ -37,6 +37,11 @@ app.get('/api/rooms/:code', (req, res) => {
   res.json({ roomId: room.id, peerCount: room.peers.size });
 });
 
+// Serve the same client app for shareable room URLs like /COOL-9710
+app.get('/:roomCode([A-Za-z0-9-]+)', (req, res) => {
+  res.sendFile(path.join(ROOT, 'index.html'));
+});
+
 // ── WebSocket server ───────────────────────────────────────────────────────
 const wss = new WebSocketServer({ server, path: '/ws' });
 wss.on('connection', (ws, req) => handleConnection(ws, req, roomManager));

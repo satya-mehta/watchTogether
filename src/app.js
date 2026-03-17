@@ -3,7 +3,8 @@ import { WatchTogetherClient } from './client.js';
 import { VideoCall } from './webrtc.js';
 
 // ── Config ────────────────────────────────────────────────────────────────
-const SERVER_URL = 'ws://localhost:3001/ws';  // change for production
+const SERVER_ORIGIN = window.location.origin;
+const SERVER_URL = `${window.location.protocol === 'https:' ? 'wss:' : 'ws:'}//${window.location.host}/ws`;
 
 // ── DOM references ─────────────────────────────────────────────────────────
 const movieVideo    = document.getElementById('movie-video');     // <video> for the movie file
@@ -22,6 +23,7 @@ const createRoomBtn = document.getElementById('create-room-btn');
 const joinRoomBtn   = document.getElementById('join-room-btn');
 const roomCodeInput = document.getElementById('room-code-input');
 const readyBtn      = document.getElementById('ready-btn');
+const landingAlert  = document.getElementById('landing-alert');
 
 const syncToast     = document.getElementById('sync-toast');
 const reactionBtns  = document.querySelectorAll('[data-reaction]');
@@ -35,13 +37,50 @@ let myFileName = null;
 let roomCode = null;
 let peerPresent = false;
 
+function normalizeRoomCode(value) {
+  return value.trim().replace(/^\/+|\/+$/g, '').toUpperCase();
+}
+
+function getRoomCodeFromPath() {
+  const code = normalizeRoomCode(window.location.pathname);
+  return /^[A-Z0-9-]{4,20}$/.test(code) ? code : null;
+}
+
+function showLandingNotice(message) {
+  if (!landingAlert) return;
+  landingAlert.textContent = message;
+  landingAlert.classList.add('show');
+}
+
+function clearLandingNotice() {
+  landingAlert?.classList.remove('show');
+  if (landingAlert) landingAlert.textContent = '';
+}
+
+function showLandingScreen() {
+  document.getElementById('screen-lobby')?.classList.remove('active');
+  document.getElementById('screen-watch')?.classList.remove('active');
+  document.getElementById('screen-landing')?.classList.add('active');
+}
+
+function resetToLanding(message = '') {
+  roomCode = null;
+  isHost = false;
+  peerPresent = false;
+  roomCodeInput.value = '';
+  window.history.replaceState({}, '', '/');
+  showLandingScreen();
+  if (message) showLandingNotice(message);
+}
+
 // ═════════════════════════════════════════════════════════════════════════════
 // 1. ROOM CREATION / JOINING
 // ═════════════════════════════════════════════════════════════════════════════
 
 createRoomBtn?.addEventListener('click', async () => {
+  clearLandingNotice();
   // Ask the server to create a room and get a code back
-  const res  = await fetch('http://localhost:3001/api/rooms', { method: 'POST' });
+  const res  = await fetch(`${SERVER_ORIGIN}/api/rooms`, { method: 'POST' });
   const data = await res.json();
   roomCode = data.roomCode;
   isHost   = true;
@@ -52,11 +91,12 @@ createRoomBtn?.addEventListener('click', async () => {
 });
 
 joinRoomBtn?.addEventListener('click', async () => {
+  clearLandingNotice();
   const code = roomCodeInput?.value.trim().toUpperCase();
   if (!code) return alert('Enter a room code');
 
   // Validate the room exists before connecting
-  const res = await fetch(`http://localhost:3001/api/rooms/${code}`);
+  const res = await fetch(`${SERVER_ORIGIN}/api/rooms/${code}`);
   if (!res.ok) return alert('Room not found or full');
 
   roomCode = code;
@@ -76,6 +116,37 @@ async function connectAndJoin() {
   wireClientEvents();
   wireVideoControls();
   wireReactions();
+}
+
+async function autoJoinFromPath() {
+  const rawPath = normalizeRoomCode(window.location.pathname);
+  if (!rawPath) return;
+
+  const code = getRoomCodeFromPath();
+  if (!code) {
+    resetToLanding('That invite link is not a valid room code.');
+    return;
+  }
+
+  roomCode = code;
+  roomCodeInput.value = code;
+
+  try {
+    const res = await fetch(`${SERVER_ORIGIN}/api/rooms/${code}`);
+    if (!res.ok) {
+      resetToLanding('That room was not found or is already full.');
+      return;
+    }
+
+    isHost = false;
+    clearLandingNotice();
+    myName = prompt('Your name?') || 'Guest';
+    showLobby(roomCode);
+    await connectAndJoin();
+  } catch (err) {
+    console.error('Auto-join failed:', err);
+    resetToLanding('Could not auto-join that room right now. Please try again.');
+  }
 }
 
 // ═════════════════════════════════════════════════════════════════════════════
@@ -346,10 +417,16 @@ function spawnFloatingReaction(emoji) {
 // ═════════════════════════════════════════════════════════════════════════════
 
 function showLobby(code) {
+  clearLandingNotice();
   document.getElementById('screen-landing')?.classList.remove('active');
   document.getElementById('screen-lobby')?.classList.add('active');
   const codeEl = document.getElementById('lobby-room-code');
   if (codeEl) codeEl.textContent = code;
+  const roomPath = `/${code}`;
+  if (window.location.pathname !== roomPath) {
+    window.history.replaceState({}, '', roomPath);
+  }
+  window.setRoomCode(code);  // Update share link in HTML
 }
 
 function showCallUI(visible) {
@@ -452,3 +529,5 @@ function formatDur(sec) {
 const style = document.createElement('style');
 style.textContent = `@keyframes floatUp { from { opacity:1; transform:translateY(0) scale(1); } to { opacity:0; transform:translateY(-160px) scale(1.5); } }`;
 document.head.appendChild(style);
+
+autoJoinFromPath();
