@@ -77,8 +77,32 @@ body{font-family:'Nunito',sans-serif;background:var(--bg);color:var(--text);min-
 .code-input:focus{border-color:var(--primary);box-shadow:0 0 12px rgba(99,102,241,.2);}
 .land-note{font-size:13px;color:var(--text3);text-align:center;line-height:1.9;}
 .land-note em{color:var(--text2);font-style:normal;font-weight:700;}
+.how-link{font-size:13px;color:rgba(245,247,250,.72);text-decoration:none;border-bottom:1px dashed rgba(245,247,250,.35);padding-bottom:2px;transition:color .2s,border-color .2s;cursor:pointer;}
+.how-link:hover{color:#fff;border-color:rgba(255,255,255,.7);}
 .landing-alert{display:none;width:100%;background:rgba(249,115,22,.12);border:1px solid rgba(249,115,22,.35);border-radius:14px;padding:12px 14px;font-size:13px;line-height:1.6;color:#ffd7bf;}
 .landing-alert.show{display:block;}
+.help-overlay{position:fixed;inset:0;z-index:99998;background:rgba(10,14,20,.78);backdrop-filter:blur(8px);display:none;align-items:center;justify-content:center;padding:24px;}
+.help-overlay.show{display:flex;}
+.help-card{position:relative;width:min(100%,520px);background:rgba(26,31,46,.96);border:1px solid rgba(99,102,241,.22);border-radius:24px;padding:26px 24px 22px;box-shadow:0 20px 60px rgba(0,0,0,.35);}
+.help-close{position:absolute;top:14px;right:14px;width:34px;height:34px;border:none;border-radius:50%;background:rgba(99,102,241,.12);color:var(--text2);font-size:18px;cursor:pointer;transition:background .2s,color .2s;}
+.help-close:hover{background:rgba(99,102,241,.22);color:#fff;}
+.help-kicker{font-size:10px;font-weight:700;letter-spacing:2px;text-transform:uppercase;color:var(--text3);margin-bottom:10px;}
+.help-title{font-family:'Space Grotesk',sans-serif;font-size:24px;letter-spacing:-.4px;margin-bottom:8px;}
+.help-copy{font-size:14px;line-height:1.7;color:var(--text2);margin-bottom:16px;}
+.help-steps{display:flex;flex-direction:column;gap:12px;}
+.help-step{background:rgba(99,102,241,.06);border:1px solid rgba(99,102,241,.12);border-radius:16px;overflow:hidden;transition:border-color .2s,background .2s,box-shadow .2s;}
+.help-step.open{background:rgba(99,102,241,.1);border-color:rgba(99,102,241,.24);box-shadow:0 10px 24px rgba(0,0,0,.16);}
+.help-step-trigger{width:100%;display:flex;align-items:center;gap:12px;background:none;border:none;color:inherit;text-align:left;padding:14px;cursor:pointer;}
+.help-step-num{flex:0 0 28px;width:28px;height:28px;border-radius:50%;display:flex;align-items:center;justify-content:center;background:linear-gradient(135deg,var(--primary),var(--accent));color:#fff;font-size:12px;font-weight:700;}
+.help-step-text{flex:1;font-size:13px;line-height:1.7;color:var(--text2);}
+.help-step-text strong{color:var(--text);}
+.help-step-chevron{flex:0 0 auto;color:var(--text3);font-size:18px;transition:transform .2s,color .2s;}
+.help-step.open .help-step-chevron{transform:rotate(45deg);color:var(--text2);}
+.help-step-detail{display:grid;grid-template-rows:0fr;transition:grid-template-rows .25s ease;}
+.help-step.open .help-step-detail{grid-template-rows:1fr;}
+.help-step-detail-inner{overflow:hidden;}
+.help-step-detail-copy{padding:0 14px 14px 54px;font-size:12.5px;line-height:1.8;color:var(--text3);}
+.help-foot{margin-top:16px;font-size:12px;color:var(--text3);text-align:center;}
 
 /* ── Lobby ──────────────────────────────────────────────────────────────── */
 #screen-lobby{position:relative;gap:22px;}
@@ -302,6 +326,67 @@ input[type=range]#seek-bar::-webkit-slider-thumb{appearance:none;width:14px;heig
       </div>
     </div>
     <div class="land-note">Works with any <em>offline video file</em>.<br>No uploads. No subscriptions. Just you and them.</div>
+    <a class="how-link" id="how-it-works-link">How it works?</a>
+  </div>
+</div>
+
+<div class="help-overlay" id="help-overlay" aria-hidden="true">
+  <div class="help-card" role="dialog" aria-modal="true" aria-labelledby="help-title">
+    <button class="help-close" id="help-close-btn" aria-label="Close guide">×</button>
+    <div class="help-kicker">New Here?</div>
+    <div class="help-title" id="help-title">How Watch Together works</div>
+    <div class="help-copy">You and your friend both keep the movie file locally. The app just syncs playback and opens a small live call so it feels like you are watching together.</div>
+    <div class="help-steps">
+      <div class="help-step open">
+        <button class="help-step-trigger" type="button">
+          <div class="help-step-num">1</div>
+          <div class="help-step-text"><strong>Create a room</strong> or join one with a code or shared link.</div>
+          <div class="help-step-chevron">+</div>
+        </button>
+        <div class="help-step-detail">
+          <div class="help-step-detail-inner">
+            <div class="help-step-detail-copy">If you are starting the watch party, tap <strong>Create a room</strong>. If a friend already invited you, paste the room code or simply open their shared link and you will land in the room automatically.</div>
+          </div>
+        </div>
+      </div>
+      <div class="help-step">
+        <button class="help-step-trigger" type="button">
+          <div class="help-step-num">2</div>
+          <div class="help-step-text"><strong>Both people load the same video file</strong> from their own device. Nothing gets uploaded.</div>
+          <div class="help-step-chevron">+</div>
+        </button>
+        <div class="help-step-detail">
+          <div class="help-step-detail-inner">
+            <div class="help-step-detail-copy">Each person chooses the movie file from their own computer or phone. The app does not upload the video anywhere, it only checks enough info to confirm both sides picked the same movie length.</div>
+          </div>
+        </div>
+      </div>
+      <div class="help-step">
+        <button class="help-step-trigger" type="button">
+          <div class="help-step-num">3</div>
+          <div class="help-step-text"><strong>Wait for the file match check</strong>, then both tap <strong>I'm ready</strong>.</div>
+          <div class="help-step-chevron">+</div>
+        </button>
+        <div class="help-step-detail">
+          <div class="help-step-detail-inner">
+            <div class="help-step-detail-copy">Once both files are loaded, the app compares their durations. If they match, both people can press <strong>I'm ready</strong> and the session will start with a short countdown so you begin together.</div>
+          </div>
+        </div>
+      </div>
+      <div class="help-step">
+        <button class="help-step-trigger" type="button">
+          <div class="help-step-num">4</div>
+          <div class="help-step-text"><strong>Enjoy the watch party</strong>. Play, pause, seek, reactions, and the video call all stay in sync.</div>
+          <div class="help-step-chevron">+</div>
+        </button>
+        <div class="help-step-detail">
+          <div class="help-step-detail-inner">
+            <div class="help-step-detail-copy">After the countdown, playback controls stay synced between both viewers. You can pause, seek, react, and talk over video without needing to keep manually matching the movie time.</div>
+          </div>
+        </div>
+      </div>
+    </div>
+    <div class="help-foot">Tip: sharing the room link is the easiest way to bring someone in.</div>
   </div>
 </div>
 
@@ -443,6 +528,10 @@ input[type=range]#seek-bar::-webkit-slider-thumb{appearance:none;width:14px;heig
   const tcur = document.getElementById('time-current');
   const ttot = document.getElementById('time-total');
   const ppIcon = document.getElementById('pp-icon');
+  const helpOverlay = document.getElementById('help-overlay');
+  const howItWorksLink = document.getElementById('how-it-works-link');
+  const helpCloseBtn = document.getElementById('help-close-btn');
+  const helpSteps = Array.from(document.querySelectorAll('.help-step'));
   const PLAY_PATH  = '<path d="M8 5v14l11-7z"/>';
   const PAUSE_PATH = '<path d="M6 19h4V5H6v14zm8-14v14h4V5h-4z"/>';
   const urlnow = window.location.origin;
@@ -505,6 +594,37 @@ input[type=range]#seek-bar::-webkit-slider-thumb{appearance:none;width:14px;heig
     document.getElementById('share-link').textContent = (urlnow + '/' + code);
   }
   window.setRoomCode = setRoomCode;
+
+  const openHelpOverlay = () => {
+    helpOverlay?.classList.add('show');
+    helpOverlay?.setAttribute('aria-hidden', 'false');
+  };
+
+  const closeHelpOverlay = () => {
+    helpOverlay?.classList.remove('show');
+    helpOverlay?.setAttribute('aria-hidden', 'true');
+  };
+
+  howItWorksLink?.addEventListener('click', openHelpOverlay);
+  helpCloseBtn?.addEventListener('click', closeHelpOverlay);
+  helpOverlay?.addEventListener('click', (e) => {
+    if (e.target === helpOverlay) closeHelpOverlay();
+  });
+
+  helpSteps.forEach((step) => {
+    const trigger = step.querySelector('.help-step-trigger');
+    trigger?.addEventListener('click', () => {
+      const willOpen = !step.classList.contains('open');
+      helpSteps.forEach((item) => item.classList.remove('open'));
+      if (willOpen) step.classList.add('open');
+    });
+  });
+
+  document.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape' && helpOverlay?.classList.contains('show')) {
+      closeHelpOverlay();
+    }
+  });
 
   const particleCanvas = document.getElementById('particle-canvas');
   const particleCtx = particleCanvas?.getContext('2d');
