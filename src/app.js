@@ -1,17 +1,6 @@
-/**
- * Watch Together — Full Frontend Wiring
- *
- * This file is the "glue" that connects:
- *   1. The WatchTogetherClient (WebSocket sync)
- *   2. The VideoCall module (WebRTC peer-to-peer call)
- *   3. Your HTML video element and UI
- *
- * Import this in your HTML or bundle it with Vite/Webpack.
- * Assumes your HTML has the elements referenced below.
- */
 
 import { WatchTogetherClient } from './client.js';
-import { VideoCall }           from './webrtc.js';
+import { VideoCall } from './webrtc.js';
 
 // ── Config ────────────────────────────────────────────────────────────────
 const SERVER_URL = 'ws://localhost:3001/ws';  // change for production
@@ -42,6 +31,7 @@ let client   = null;
 let call     = null;
 let isHost   = false;
 let myName   = 'You';
+let myFileName = null;
 let roomCode = null;
 let peerPresent = false;
 
@@ -98,6 +88,17 @@ function wireClientEvents() {
     console.log('Joined room', data.roomCode, 'as', data.yourPeerId);
     peerPresent = data.peers.some((peer) => peer.peerId !== data.yourPeerId);
     updatePeerList(data.peers);
+    // Show file status and ready state for any peer that already has loaded data
+    data.peers.forEach(peer => {
+      if (peer.peerId !== data.yourPeerId) {
+        if (peer.fileDuration) {
+          updatePeerFileStatus(peer.peerId, peer.fileDuration, peer.fileName);
+        }
+        if (peer.isReady) {
+          updatePeerReadyState(peer.peerId, peer.isReady);
+        }
+      }
+    });
   });
 
   client.on('peer_joined', (data) => {
@@ -116,7 +117,7 @@ function wireClientEvents() {
 
   // ── File loading ─────────────────────────────────────────────────────────
   client.on('peer_file_ready', (data) => {
-    updatePeerFileStatus(data.peerId, data.durationSec);
+    updatePeerFileStatus(data.peerId, data.durationSec, data.fileName);
   });
 
   client.on('duration_check', ({ match, diff }) => {
@@ -188,10 +189,16 @@ function wireVideoControls() {
   fileInput?.addEventListener('change', (e) => {
     const file = e.target.files[0];
     if (!file) return;
+    myFileName = file.name;
     movieVideo.src = URL.createObjectURL(file);
     movieVideo.addEventListener('loadedmetadata', () => {
-      client.fileReady(movieVideo.duration);
+      client.fileReady(movieVideo.duration, file.name);
       seekBar && (seekBar.max = movieVideo.duration);
+      // Update user's own file icon to checkmark
+      const yourIconEl = document.querySelector('#your-file-drop .fd-icon');
+      if (yourIconEl) {
+        yourIconEl.textContent = '✅';
+      }
     }, { once: true });
   });
 
@@ -376,9 +383,29 @@ function removePeerFromUI(peerId) {
   el.querySelector('.pav').textContent   = '?';
 }
 
-function updatePeerFileStatus(peerId, durationSec) {
+function updatePeerFileStatus(peerId, durationSec, fileName = null) {
   const el = document.getElementById('friend-file-label');
-  if (el) el.innerHTML = `File loaded &nbsp;<span class="fd-dur">${formatDur(durationSec)}</span>`;
+  const friendIconEl = document.querySelector('#friend-card .file-drop .fd-icon');
+  if (el) {
+    let display = `File loaded &nbsp;<span class="fd-dur">${formatDur(durationSec)}</span>`;
+    if (fileName) {
+      const truncated = truncateFileName(fileName, 20);
+      display = `${truncated} &nbsp;<span class="fd-dur">${formatDur(durationSec)}</span>`;
+    }
+    el.innerHTML = display;
+  }
+  if (friendIconEl) {
+    friendIconEl.textContent = '✅';
+  }
+}
+
+function truncateFileName(fileName, maxLength = 20) {
+  if (fileName.length <= maxLength) return fileName;
+  const lastDotIndex = fileName.lastIndexOf('.');
+  if (lastDotIndex === -1) return fileName.substring(0, maxLength - 3) + '...';
+  const ext = fileName.substring(lastDotIndex);
+  const nameLength = maxLength - 3 - ext.length;
+  return fileName.substring(0, nameLength) + '...' + ext;
 }
 
 function updatePeerReadyState(peerId, isReady) {

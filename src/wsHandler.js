@@ -26,6 +26,7 @@ function roomSnapshot(room, forPeerId) {
       name:         p.name,
       isHost:       p.isHost,
       fileDuration: p.fileDuration,
+      fileName:     p.fileName || null,
       isReady:      p.isReady,
     });
   });
@@ -80,16 +81,18 @@ function handleConnection(ws, req, roomManager) {
     if (!myRoom || !myPeerId) return send(ws, 'error', { message: 'Not in a room' });
 
     // ── FILE_READY ────────────────────────────────────────────────────────
-    // Client sends: { type:'file_ready', durationSec }
+    // Client sends: { type:'file_ready', durationSec, fileName }
     // Server checks if durations match (within tolerance), tells both peers.
     if (type === 'file_ready') {
       const peer = myRoom.peers.get(myPeerId);
       peer.fileDuration = msg.durationSec;
+      peer.fileName = msg.fileName || null;
 
       broadcast(myRoom, 'peer_file_ready', {
         peerId:      myPeerId,
         durationSec: msg.durationSec,
-      });
+        fileName:    msg.fileName || null,
+      }, myPeerId);  // Exclude sender so they don't get their own message back
 
       // Check if both peers have loaded files
       const allPeers = [...myRoom.peers.values()];

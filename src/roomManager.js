@@ -1,7 +1,7 @@
 const { v4: uuidv4 } = require('uuid');
 
 // ── Room code generator ────────────────────────────────────────────────────
-const ADJECTIVES = ['COZY','WARM','SOFT','CALM','SWEET','LAZY','GOLDEN','QUIET'];
+const ADJECTIVES = ['COOL','NIGHT','SOFT','CALM','SWEET','LAZY','GOLDEN','QUIET'];
 const NOUNS      = ['NOOK','DEN','SOFA','FILM','DUSK','MOON','STAR','NIGHT'];
 
 function generateCode() {

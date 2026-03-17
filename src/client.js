@@ -1,6 +1,6 @@
 /**
  * WatchTogether Client SDK
- * Drop this into your frontend. Handles all WebSocket communication,
+ * Handles all WebSocket communication,
  * reconnection, and sync logic so UI code stays clean.
  *
  * Usage:
@@ -78,8 +78,8 @@ class WatchTogetherClient extends EventTarget {
   }
 
   /** Tell the server your file is loaded and its duration in seconds. */
-  fileReady(durationSec) {
-    this._send('file_ready', { durationSec });
+  fileReady(durationSec, fileName = null) {
+    this._send('file_ready', { durationSec, fileName });
   }
 
   /** Toggle your ready state in the lobby. */
