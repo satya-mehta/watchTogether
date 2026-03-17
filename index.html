@@ -1,0 +1,411 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+<title>Watch Together</title>
+<link href="https://fonts.googleapis.com/css2?family=Nunito:wght@400;600;700&family=Space+Grotesk:wght@400;500&display=swap" rel="stylesheet"/>
+<style>
+/* ── Reset & tokens ─────────────────────────────────────────────────────── */
+*{margin:0;padding:0;box-sizing:border-box;}
+:root{
+  --bg:#14121a;--bg2:#1b1825;--bg3:#221f2e;--surface:#2a263a;
+  --rose:#e8826a;--rose-dim:rgba(232,130,106,.12);
+  --lavender:#b8a9d9;
+  --text:#f0edf8;--text2:#a49dba;--text3:#5e5875;
+  --border:rgba(255,255,255,.07);--border-rose:rgba(232,130,106,.25);
+  --green:#6dd69a;--red:#e86a6a;
+}
+body{font-family:'Nunito',sans-serif;background:var(--bg);color:var(--text);min-height:100vh;overflow-x:hidden;}
+
+/* ── Screens ────────────────────────────────────────────────────────────── */
+.screen{display:none;min-height:100vh;flex-direction:column;align-items:center;justify-content:center;padding:32px 24px;}
+.screen.active{display:flex;}
+
+/* ── Landing ────────────────────────────────────────────────────────────── */
+.blobs{position:fixed;inset:0;pointer-events:none;overflow:hidden;z-index:0;}
+.blob{position:absolute;border-radius:50%;filter:blur(80px);opacity:.18;}
+.blob1{width:420px;height:420px;background:#e8826a;top:-100px;right:-80px;}
+.blob2{width:300px;height:300px;background:#b8a9d9;bottom:-60px;left:-60px;}
+
+.landing-inner{position:relative;z-index:1;width:100%;max-width:420px;display:flex;flex-direction:column;align-items:center;gap:32px;}
+.logo-icon{width:68px;height:68px;border-radius:20px;display:flex;align-items:center;justify-content:center;background:linear-gradient(135deg,rgba(232,130,106,.22),rgba(184,169,217,.14));border:1px solid rgba(232,130,106,.3);margin-bottom:16px;}
+.app-name{font-family:'Space Grotesk',sans-serif;font-size:28px;font-weight:500;letter-spacing:-.5px;}
+.app-name .dot{color:var(--rose);}
+.app-tagline{font-size:14px;color:var(--text3);margin-top:8px;text-align:center;line-height:1.7;}
+
+.land-cards{width:100%;display:flex;flex-direction:column;gap:10px;}
+.land-card{background:var(--bg2);border:1px solid var(--border);border-radius:18px;padding:22px;}
+.card-label{font-size:10px;font-weight:700;letter-spacing:2px;color:var(--text3);text-transform:uppercase;margin-bottom:14px;}
+
+.btn-primary{width:100%;padding:15px;background:var(--rose);border:none;border-radius:12px;font-family:'Nunito',sans-serif;font-size:15px;font-weight:700;color:#fff;cursor:pointer;box-shadow:0 4px 20px rgba(232,130,106,.35);transition:opacity .2s,transform .12s;}
+.btn-primary:hover{opacity:.88;transform:translateY(-1px);}
+.btn-secondary{padding:13px 22px;background:rgba(184,169,217,.18);border:1.5px solid rgba(184,169,217,.45);border-radius:12px;font-family:'Nunito',sans-serif;font-size:14px;font-weight:700;color:#d4c8f0;cursor:pointer;transition:background .2s;}
+.btn-secondary:hover{background:rgba(184,169,217,.28);}
+
+.join-row{display:flex;gap:8px;}
+.code-input{flex:1;padding:13px 16px;background:var(--bg3);border:1.5px solid rgba(255,255,255,.11);border-radius:12px;font-family:'Space Grotesk',monospace;font-size:14px;letter-spacing:2px;color:var(--text);text-transform:uppercase;outline:none;transition:border-color .2s;}
+.code-input::placeholder{color:var(--text3);letter-spacing:1px;text-transform:none;font-size:13px;}
+.code-input:focus{border-color:var(--rose);}
+.land-note{font-size:13px;color:var(--text3);text-align:center;line-height:1.9;}
+.land-note em{color:var(--text2);font-style:normal;font-weight:700;}
+
+/* ── Lobby ──────────────────────────────────────────────────────────────── */
+#screen-lobby{position:relative;gap:22px;}
+.lobby-back{position:absolute;top:24px;left:24px;font-size:13px;color:var(--text3);cursor:pointer;font-weight:600;}
+.lobby-back:hover{color:var(--text2);}
+.lobby-code-label{font-size:10px;letter-spacing:2px;text-transform:uppercase;color:var(--text3);font-weight:700;margin-bottom:8px;}
+.lobby-room-code{font-family:'Space Grotesk',monospace;font-size:30px;font-weight:500;letter-spacing:8px;}
+.lobby-sub{font-size:13px;color:var(--text3);margin-top:6px;}
+.share-pill{display:inline-flex;align-items:center;gap:10px;background:var(--bg3);border:1px solid var(--border);border-radius:40px;padding:8px 8px 8px 16px;margin-top:14px;}
+.share-text{font-size:12px;color:var(--text2);}
+.copy-btn{background:var(--rose);border:none;border-radius:30px;padding:7px 14px;font-family:'Nunito',sans-serif;font-size:12px;font-weight:700;color:#fff;cursor:pointer;}
+
+.players{display:flex;gap:12px;width:100%;max-width:520px;}
+.player-card{flex:1;background:var(--bg2);border:1px solid var(--border);border-radius:20px;padding:20px 16px;display:flex;flex-direction:column;gap:12px;}
+.player-card.you{border-color:rgba(232,130,106,.25);}
+.ptag{font-size:10px;letter-spacing:2px;text-transform:uppercase;color:var(--text3);font-weight:700;}
+.pav{width:44px;height:44px;border-radius:13px;display:flex;align-items:center;justify-content:center;font-size:14px;font-weight:700;font-family:'Space Grotesk',sans-serif;}
+.pav-you{background:rgba(232,130,106,.18);color:var(--rose);border:1px solid rgba(232,130,106,.3);}
+.pav-them{background:var(--bg3);color:var(--text3);border:1px solid var(--border);}
+.pname{font-size:14px;font-weight:600;}
+.pname-wait{color:var(--text3);}
+.file-drop{border:1.5px dashed var(--border);border-radius:12px;padding:16px 12px;text-align:center;cursor:pointer;transition:border-color .2s,background .2s;position:relative;}
+.file-drop input{position:absolute;inset:0;opacity:0;cursor:pointer;}
+.file-drop:hover{border-color:rgba(232,130,106,.4);background:rgba(232,130,106,.05);}
+.file-drop.loaded{border-color:rgba(109,214,154,.35);border-style:solid;background:rgba(109,214,154,.05);}
+.fd-icon{font-size:20px;margin-bottom:5px;}
+.fd-label{font-size:12px;color:var(--text3);line-height:1.6;}
+.fd-dur{display:inline-block;margin-top:5px;font-size:11px;font-family:'Space Grotesk',monospace;color:var(--green);background:rgba(109,214,154,.12);border-radius:20px;padding:3px 10px;}
+
+.sync-row{display:flex;align-items:center;gap:12px;background:var(--bg2);border:1px solid var(--border);border-radius:14px;padding:14px 18px;max-width:520px;width:100%;}
+.sdot{width:9px;height:9px;border-radius:50%;flex-shrink:0;}
+.sdot.ok{background:var(--green);box-shadow:0 0 8px rgba(109,214,154,.5);}
+.sdot.warn{background:#f0c060;}
+.sdot.idle{background:var(--text3);}
+.slabel{font-size:13px;color:var(--text2);flex:1;}
+
+.btn-ready{width:100%;max-width:520px;padding:15px;background:transparent;border:1.5px solid rgba(232,130,106,.35);border-radius:14px;color:var(--rose);font-family:'Nunito',sans-serif;font-size:15px;font-weight:700;cursor:pointer;transition:background .2s,border-color .2s,color .2s;}
+.btn-ready:hover:not(:disabled){background:var(--rose-dim);border-color:var(--rose);}
+.btn-ready.active{background:var(--rose);color:#fff;border-color:var(--rose);}
+.btn-ready:disabled{opacity:.3;cursor:not-allowed;}
+
+/* ── Watch ──────────────────────────────────────────────────────────────── */
+#screen-watch{padding:0;background:#000;position:relative;overflow:hidden;min-height:100vh;}
+
+/* Hidden actual movie video */
+#movie-video{position:absolute;inset:0;width:100%;height:100%;object-fit:contain;z-index:1;background:#000;}
+
+/* Overlays */
+.watch-overlay{position:absolute;inset:0;z-index:2;pointer-events:none;}
+
+/* PiP bubble — friend's face */
+.pip-bubble{
+  position:absolute;top:20px;right:20px;z-index:10;
+  width:120px;height:86px;border-radius:14px;
+  border:1.5px solid rgba(184,169,217,.3);
+  overflow:hidden;cursor:grab;
+  box-shadow:0 4px 24px rgba(0,0,0,.5);
+  pointer-events:all;
+}
+#remote-video{width:100%;height:100%;object-fit:cover;background:#1c1828;display:block;}
+.pip-live{position:absolute;top:7px;left:7px;display:flex;align-items:center;gap:4px;z-index:2;}
+.pip-live-dot{width:6px;height:6px;border-radius:50%;background:#f06060;animation:bl 1.5s ease infinite;}
+@keyframes bl{0%,100%{opacity:1}50%{opacity:.3}}
+.pip-live-txt{font-size:9px;letter-spacing:1px;color:rgba(255,255,255,.5);text-transform:uppercase;font-weight:600;}
+
+/* Self-view (tiny, bottom-left of PiP) */
+#local-video{position:absolute;bottom:0;left:0;width:36px;height:36px;object-fit:cover;border-radius:6px;opacity:.8;}
+
+/* Reactions sidebar */
+.reactions{position:absolute;right:18px;top:50%;transform:translateY(-50%);z-index:10;display:flex;flex-direction:column;gap:8px;pointer-events:all;}
+.react-btn{width:40px;height:40px;border-radius:12px;background:rgba(20,18,28,.75);border:1px solid var(--border);display:flex;align-items:center;justify-content:center;font-size:18px;cursor:pointer;transition:transform .15s;}
+.react-btn:hover{transform:scale(1.25) rotate(-5deg);}
+
+/* Sync toast */
+.sync-toast{position:absolute;top:22px;left:50%;transform:translateX(-50%);background:rgba(26,24,36,.92);border:1px solid var(--border-rose);border-radius:24px;padding:8px 18px;font-size:12px;color:var(--text2);z-index:10;white-space:nowrap;display:none;pointer-events:none;}
+.sync-toast.show{display:block;}
+
+/* Master badge */
+.master-badge{position:absolute;top:22px;left:20px;z-index:10;background:rgba(232,130,106,.18);border:1px solid rgba(232,130,106,.35);border-radius:24px;padding:7px 14px;font-size:11px;font-weight:700;color:var(--rose);display:none;}
+.master-badge.show{display:block;}
+
+/* Control bar */
+.ctrl-bar{position:absolute;bottom:0;left:0;right:0;z-index:15;padding:0 20px 18px;background:linear-gradient(to top,rgba(0,0,0,.9),transparent);transition:opacity .35s;pointer-events:all;}
+.ctrl-bar.hidden{opacity:0;pointer-events:none;}
+.progress-track{height:4px;background:rgba(255,255,255,.1);border-radius:3px;cursor:pointer;position:relative;margin-bottom:10px;}
+.progress-track:hover{height:5px;}
+input[type=range]#seek-bar{width:100%;height:4px;appearance:none;background:linear-gradient(to right,var(--rose) var(--pct,32%),rgba(255,255,255,.1) var(--pct,32%));border-radius:3px;cursor:pointer;outline:none;}
+input[type=range]#seek-bar::-webkit-slider-thumb{appearance:none;width:14px;height:14px;border-radius:50%;background:var(--rose);cursor:pointer;}
+.time-row{display:flex;justify-content:space-between;margin-bottom:10px;}
+.time-txt{font-family:'Space Grotesk',monospace;font-size:11px;color:rgba(255,255,255,.35);}
+.ctrl-row{display:flex;align-items:center;gap:12px;}
+.cb{background:none;border:none;cursor:pointer;color:rgba(255,255,255,.5);padding:4px;display:flex;align-items:center;justify-content:center;transition:color .15s;}
+.cb:hover{color:#fff;}
+.cb.pp{width:46px;height:46px;background:var(--rose);border-radius:50%;color:#fff;}
+.cb.pp:hover{opacity:.88;}
+.vol-sl{width:68px;height:3px;appearance:none;background:rgba(255,255,255,.18);border-radius:2px;cursor:pointer;}
+.vol-sl::-webkit-slider-thumb{appearance:none;width:10px;height:10px;border-radius:50%;background:#fff;cursor:pointer;}
+.spacer{flex:1;}
+.sync-chip{display:flex;align-items:center;gap:6px;background:rgba(18,16,26,.7);border:1px solid var(--border);border-radius:20px;padding:6px 13px;font-size:11px;color:rgba(255,255,255,.35);font-family:'Space Grotesk',monospace;}
+.chip-dot{width:6px;height:6px;border-radius:50%;}
+.chip-dot.ok{background:var(--green);box-shadow:0 0 6px rgba(109,214,154,.6);}
+
+/* Call controls strip (mute / camera / end) */
+#call-controls{display:none;position:absolute;bottom:90px;left:50%;transform:translateX(-50%);z-index:20;gap:10px;align-items:center;background:rgba(20,18,28,.85);border:1px solid var(--border);border-radius:30px;padding:8px 16px;}
+.call-btn{background:none;border:none;border-radius:50%;width:36px;height:36px;display:flex;align-items:center;justify-content:center;cursor:pointer;color:var(--text);font-size:15px;transition:background .2s;}
+.call-btn:hover{background:rgba(255,255,255,.1);}
+.call-btn.danger{color:var(--red);}
+.call-btn.active{background:rgba(232,106,106,.2);color:var(--red);}
+
+/* Countdown overlay */
+.countdown-overlay{position:fixed;inset:0;z-index:9999;background:rgba(20,18,26,.96);display:none;align-items:center;justify-content:center;flex-direction:column;gap:14px;}
+.countdown-overlay.show{display:flex;}
+.cd-avatars{display:flex;align-items:center;margin-bottom:10px;}
+.cd-av{width:52px;height:52px;border-radius:16px;display:flex;align-items:center;justify-content:center;font-size:15px;font-weight:700;font-family:'Space Grotesk',sans-serif;border:2px solid var(--bg);}
+.cd-av.you{background:rgba(232,130,106,.2);color:var(--rose);margin-right:-10px;z-index:1;}
+.cd-av.them{background:rgba(184,169,217,.2);color:var(--lavender);}
+.cd-heart{font-size:22px;margin:0 14px;}
+.countdown-number{font-family:'Space Grotesk',sans-serif;font-size:110px;font-weight:500;color:var(--rose);line-height:1;animation:cdp 1s ease infinite;}
+@keyframes cdp{0%,100%{transform:scale(1)}50%{transform:scale(.93)}}
+.cd-label{font-size:12px;letter-spacing:2.5px;color:var(--text3);text-transform:uppercase;font-weight:700;}
+</style>
+</head>
+<body>
+
+<!-- Blobs -->
+<div class="blobs"><div class="blob blob1"></div><div class="blob blob2"></div></div>
+
+<!-- ═══ LANDING ══════════════════════════════════════════════════════════ -->
+<div class="screen active" id="screen-landing">
+  <div class="landing-inner">
+    <div style="text-align:center;">
+      <div class="logo-icon" style="margin:0 auto;">
+        <svg width="32" height="32" viewBox="0 0 32 32" fill="none">
+          <path d="M6 8C6 6.9 6.9 6 8 6h16c1.1 0 2 .9 2 2v12c0 1.1-.9 2-2 2H8c-1.1 0-2-.9-2-2V8z" stroke="#e8826a" stroke-width="1.5"/>
+          <path d="M13 25h6M16 22v3" stroke="#e8826a" stroke-width="1.5" stroke-linecap="round"/>
+          <circle cx="22" cy="22" r="5" fill="#14121a" stroke="#b8a9d9" stroke-width="1.5"/>
+          <path d="M20.5 22l1.5-1 1.5 1v2l-1.5 1-1.5-1v-2z" fill="#b8a9d9"/>
+        </svg>
+      </div>
+      <div class="app-name">Watch Together<span class="dot">.</span></div>
+      <div class="app-tagline">Pick a movie, share a code,<br>feel like you're on the same couch.</div>
+    </div>
+    <div class="land-cards">
+      <div class="land-card">
+        <div class="card-label">Start watching</div>
+        <button class="btn-primary" id="create-room-btn">✦ &nbsp;Create a room</button>
+      </div>
+      <div class="land-card">
+        <div class="card-label">Got a code?</div>
+        <div class="join-row">
+          <input class="code-input" id="room-code-input" placeholder="e.g. COZY-4827" maxlength="9"/>
+          <button class="btn-secondary" id="join-room-btn">Join →</button>
+        </div>
+      </div>
+    </div>
+    <div class="land-note">Works with any <em>offline video file</em>.<br>No uploads. No subscriptions. Just you and them.</div>
+  </div>
+</div>
+
+<!-- ═══ LOBBY ════════════════════════════════════════════════════════════ -->
+<div class="screen" id="screen-lobby">
+  <span class="lobby-back" onclick="document.getElementById('screen-lobby').classList.remove('active');document.getElementById('screen-landing').classList.add('active');">← back</span>
+
+  <div style="text-align:center;">
+    <div class="lobby-code-label">Your room</div>
+    <div class="lobby-room-code" id="lobby-room-code">····-····</div>
+    <div class="lobby-sub">Send this code to your movie buddy</div>
+    <div class="share-pill">
+      <span class="share-text" id="share-link">watchtogether.app/····-····</span>
+      <button class="copy-btn" onclick="navigator.clipboard.writeText(document.getElementById('share-link').textContent);this.textContent='Copied ✓'">Copy link</button>
+    </div>
+  </div>
+
+  <div class="players">
+    <!-- You -->
+    <div class="player-card you">
+      <div class="ptag">You · host</div>
+      <div class="pav pav-you" id="your-avatar">YO</div>
+      <div class="pname" id="your-name">You</div>
+      <div class="file-drop" id="your-file-drop">
+        <input type="file" id="file-input" accept="video/*"/>
+        <div class="fd-icon">🎬</div>
+        <div class="fd-label" id="your-file-label">Tap to pick<br>your video file</div>
+      </div>
+    </div>
+    <!-- Friend -->
+    <div class="player-card" id="friend-card">
+      <div class="ptag">Friend · guest</div>
+      <div class="pav pav-them" id="friend-avatar">?</div>
+      <div class="pname pname-wait" id="friend-name">Waiting…</div>
+      <div class="file-drop" style="pointer-events:none;">
+        <div class="fd-icon">🌙</div>
+        <div class="fd-label" id="friend-file-label">Waiting for<br>your friend to join</div>
+      </div>
+    </div>
+  </div>
+
+  <div class="sync-row">
+    <div class="sdot idle" id="sync-dot"></div>
+    <div class="slabel" id="sync-label">Pick your video file to check for sync</div>
+  </div>
+
+  <button class="btn-ready" id="ready-btn" disabled>I'm ready 🍿</button>
+</div>
+
+<!-- ═══ WATCH ════════════════════════════════════════════════════════════ -->
+<div class="screen" id="screen-watch">
+
+  <!-- Actual movie -->
+  <video id="movie-video" preload="metadata"></video>
+
+  <!-- Friend's face (PiP) -->
+  <div class="pip-bubble" id="pip-bubble" style="display:none;">
+    <div class="pip-live">
+      <div class="pip-live-dot"></div>
+      <span class="pip-live-txt">Live</span>
+    </div>
+    <video id="remote-video" autoplay playsinline></video>
+    <video id="local-video" autoplay playsinline muted></video>
+  </div>
+
+  <!-- Sync toast -->
+  <div class="sync-toast" id="sync-toast"></div>
+
+  <!-- Master badge -->
+  <div class="master-badge" id="master-badge">You · controlling</div>
+
+  <!-- Reactions -->
+  <div class="reactions">
+    <button class="react-btn" data-reaction="❤️">❤️</button>
+    <button class="react-btn" data-reaction="😂">😂</button>
+    <button class="react-btn" data-reaction="😱">😱</button>
+    <button class="react-btn" data-reaction="👏">👏</button>
+    <button class="react-btn" data-reaction="🥹">🥹</button>
+  </div>
+
+  <!-- Call controls (mute / camera / end) -->
+  <div id="call-controls">
+    <button class="call-btn" id="mute-btn" title="Mute">🎙</button>
+    <button class="call-btn" id="camera-btn" title="Hide camera">📷</button>
+    <button class="call-btn danger" id="end-call-btn" title="End call">📵</button>
+  </div>
+
+  <!-- Countdown overlay -->
+  <div class="countdown-overlay" id="countdown-overlay">
+    <div class="cd-avatars">
+      <div class="cd-av you" id="cd-av-you">YO</div>
+      <div class="cd-heart">🎬</div>
+      <div class="cd-av them" id="cd-av-them">SA</div>
+    </div>
+    <div class="countdown-number" id="countdown-number">3</div>
+    <div class="cd-label">Both ready · lights out</div>
+  </div>
+
+  <!-- Control bar -->
+  <div class="ctrl-bar" id="ctrl-bar">
+    <input type="range" id="seek-bar" min="0" value="0" step="0.1" style="width:100%;margin-bottom:8px;"/>
+    <div class="time-row">
+      <span class="time-txt" id="time-current">0:00:00</span>
+      <span class="time-txt" id="time-total">0:00:00</span>
+    </div>
+    <div class="ctrl-row">
+      <button class="cb" id="skip-back-btn" title="-10s">
+        <svg width="22" height="22" viewBox="0 0 24 24" fill="currentColor"><path d="M12.5 3C8.36 3 4.86 5.68 3.57 9.39L5.5 10c1.03-2.85 3.72-4.9 6.9-4.9 2.72 0 5.1 1.47 6.44 3.67L16 11h5V6l-1.9 1.9C17.35 5.03 15.08 3 12.5 3zM12 7v5.5l4.25 2.52-.77 1.3L11 13.5V7H12z"/></svg>
+      </button>
+      <button class="cb pp" id="play-pause-btn">
+        <svg id="pp-icon" width="22" height="22" viewBox="0 0 24 24" fill="currentColor"><path d="M8 5v14l11-7z"/></svg>
+      </button>
+      <button class="cb" id="skip-fwd-btn" title="+10s">
+        <svg width="22" height="22" viewBox="0 0 24 24" fill="currentColor"><path d="M11.5 3C15.64 3 19.14 5.68 20.43 9.39L18.5 10c-1.03-2.85-3.72-4.9-6.9-4.9-2.62 0-4.94 1.47-6.28 3.67L8 11H3V6l1.9 1.9C6.65 5.03 8.92 3 11.5 3zM12 7v5.5l-4.25 2.52.77 1.3L13 13.5V7H12z"/></svg>
+      </button>
+      <div style="display:flex;align-items:center;gap:8px;">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor" style="color:rgba(255,255,255,.35)"><path d="M3 9v6h4l5 5V4L7 9H3zm13.5 3c0-1.77-1.02-3.29-2.5-4.03v8.05c1.48-.73 2.5-2.25 2.5-4.02z"/></svg>
+        <input class="vol-sl" type="range" id="volume-slider" min="0" max="1" step="0.05" value="0.8"/>
+      </div>
+      <div class="spacer"></div>
+      <div class="sync-chip"><div class="chip-dot ok"></div><span id="sync-chip-label">synced</span></div>
+      <button class="cb" id="fullscreen-btn">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor"><path d="M7 14H5v5h5v-2H7v-3zm-2-4h2V7h3V5H5v5zm12 7h-3v2h5v-5h-2v3zM14 5v2h3v3h2V5h-5z"/></svg>
+      </button>
+    </div>
+  </div>
+</div>
+
+<!-- ═══ Scripts ══════════════════════════════════════════════════════════ -->
+<script type="module" src="src/app.js"></script>
+
+<!-- Extra UI wiring not in app.js -->
+<script>
+  // Time display
+  const mov = document.getElementById('movie-video');
+  const tcur = document.getElementById('time-current');
+  const ttot = document.getElementById('time-total');
+  const ppIcon = document.getElementById('pp-icon');
+  const PLAY_PATH  = '<path d="M8 5v14l11-7z"/>';
+  const PAUSE_PATH = '<path d="M6 19h4V5H6v14zm8-14v14h4V5h-4z"/>';
+
+  mov.addEventListener('timeupdate', () => {
+    tcur.textContent = fmt(mov.currentTime);
+    // Update seek bar fill colour via CSS custom property
+    const sb = document.getElementById('seek-bar');
+    if (sb && mov.duration) sb.style.setProperty('--pct', (mov.currentTime/mov.duration*100)+'%');
+  });
+  mov.addEventListener('loadedmetadata', () => { ttot.textContent = fmt(mov.duration); });
+  mov.addEventListener('play',  () => ppIcon.innerHTML = PAUSE_PATH);
+  mov.addEventListener('pause', () => ppIcon.innerHTML = PLAY_PATH);
+
+  // Volume
+  document.getElementById('volume-slider').addEventListener('input', e => { mov.volume = e.target.value; });
+
+  // Fullscreen
+  document.getElementById('fullscreen-btn').addEventListener('click', () => {
+    if (!document.fullscreenElement) document.getElementById('screen-watch').requestFullscreen?.();
+    else document.exitFullscreen?.();
+  });
+
+  // Skip ±10s
+  document.getElementById('skip-back-btn').addEventListener('click', () => { mov.currentTime = Math.max(0, mov.currentTime-10); });
+  document.getElementById('skip-fwd-btn').addEventListener('click', () => { mov.currentTime = Math.min(mov.duration||Infinity, mov.currentTime+10); });
+
+  // Control bar fade on mouse idle
+  let hideTimer;
+  const cbar = document.getElementById('ctrl-bar');
+  document.getElementById('screen-watch').addEventListener('mousemove', () => {
+    cbar.classList.remove('hidden');
+    clearTimeout(hideTimer);
+    if (!mov.paused) hideTimer = setTimeout(() => cbar.classList.add('hidden'), 3000);
+  });
+
+  // PiP drag
+  const pip = document.getElementById('pip-bubble');
+  let drag=false,ox=0,oy=0;
+  pip?.addEventListener('mousedown',e=>{drag=true;ox=e.clientX-pip.offsetLeft;oy=e.clientY-pip.offsetTop;pip.style.cursor='grabbing';e.stopPropagation();});
+  document.addEventListener('mousemove',e=>{if(!drag)return;pip.style.left=(e.clientX-ox)+'px';pip.style.top=(e.clientY-oy)+'px';pip.style.right='auto';});
+  document.addEventListener('mouseup',()=>{drag=false;if(pip)pip.style.cursor='grab';});
+
+  // Lobby file drop visual
+  document.getElementById('file-input')?.addEventListener('change', e => {
+    const f = e.target.files[0]; if(!f) return;
+    document.getElementById('your-file-drop').classList.add('loaded');
+    document.getElementById('your-file-label').innerHTML = f.name + '<br><span class="fd-dur" id="your-dur">loading…</span>';
+    const tmp = document.createElement('video');
+    tmp.preload='metadata'; tmp.src=URL.createObjectURL(f);
+    tmp.onloadedmetadata = () => {
+      const d=document.getElementById('your-dur');
+      if(d) d.textContent = fmt(tmp.duration);
+    };
+  });
+
+  // Update lobby room code display
+  function setRoomCode(code) {
+    document.getElementById('lobby-room-code').textContent = code;
+    document.getElementById('share-link').textContent = 'watchtogether.app/' + code;
+  }
+  window.setRoomCode = setRoomCode;
+
+  function fmt(s){if(!s||isNaN(s))return'0:00:00';const h=Math.floor(s/3600),m=Math.floor((s%3600)/60),sc=Math.floor(s%60);return h+':'+String(m).padStart(2,'0')+':'+String(sc).padStart(2,'0');}
+</script>
+</body>
+</html>
