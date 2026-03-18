@@ -62,6 +62,8 @@ export class VideoCall extends EventTarget {
     this._remotePlayBlocked = false;
     this._boundRemotePlaybackRetry = () => this._retryRemotePlayback();
     this._unsubscribeClientEvents = [];
+    this._remoteStreamTimer = null;
+    this._disconnectTimer = null;
 
     // Wire incoming signals from the server relay
     this._unsubscribeClientEvents.push(
@@ -111,6 +113,7 @@ export class VideoCall extends EventTarget {
     this.localEl.play?.().catch(() => {});
 
     this._createPeerConnection();
+    this._armRemoteStreamWatchdog();
 
     // Host sends the offer; guest waits for it
     if (isInitiator) await this._createOffer();
@@ -149,6 +152,10 @@ export class VideoCall extends EventTarget {
       try { unsubscribe(); } catch {}
     });
     this._unsubscribeClientEvents = [];
+    clearTimeout(this._remoteStreamTimer);
+    clearTimeout(this._disconnectTimer);
+    this._remoteStreamTimer = null;
+    this._disconnectTimer = null;
     this.localStream?.getTracks().forEach(t => t.stop());
     this.pc?.close();
     this.pc          = null;
@@ -200,6 +207,8 @@ export class VideoCall extends EventTarget {
           this._attemptRemotePlayback('loadedmetadata');
         };
         this._attemptRemotePlayback('track');
+        clearTimeout(this._remoteStreamTimer);
+        this._remoteStreamTimer = null;
         this._emit('remote_stream', { stream: this.remoteEl.srcObject });
       };
 
@@ -223,12 +232,22 @@ export class VideoCall extends EventTarget {
       this._emit('ice_state', { state });
 
       if (state === 'connected' || state === 'completed') {
+        clearTimeout(this._disconnectTimer);
+        this._disconnectTimer = null;
         this._emit('connected');
       } else if (state === 'failed') {
         console.warn('[WebRTC] ICE failed — attempting restart');
         this._iceRestart();
       } else if (state === 'disconnected') {
         this._emit('peer_disconnected');
+        if (!this._disconnectTimer) {
+          this._disconnectTimer = setTimeout(() => {
+            this._disconnectTimer = null;
+            this._iceRestart();
+          }, 2500);
+        }
+      } else if (state === 'checking') {
+        this._armRemoteStreamWatchdog();
       }
     };
 
@@ -323,6 +342,7 @@ export class VideoCall extends EventTarget {
       await this.pc.setLocalDescription(offer);
       this.client.sendSignal({ type: 'offer', sdp: offer });
       this.client.sendSignal({ type: 'ice_restart' });
+      this._armRemoteStreamWatchdog();
     } catch (err) {
       console.error('[WebRTC] ICE restart failed:', err);
     }
@@ -358,6 +378,18 @@ export class VideoCall extends EventTarget {
     if (document.visibilityState === 'hidden') return;
     if (!this._remotePlayBlocked) return;
     this._attemptRemotePlayback('gesture-retry');
+  }
+
+  _armRemoteStreamWatchdog() {
+    clearTimeout(this._remoteStreamTimer);
+    this._remoteStreamTimer = setTimeout(() => {
+      this._remoteStreamTimer = null;
+      const hasRemoteTracks = (this.remoteEl?.srcObject?.getTracks?.().length ?? 0) > 0;
+      if (!hasRemoteTracks) {
+        console.warn('[WebRTC] Remote stream missing — retrying negotiation');
+        this._iceRestart();
+      }
+    }, 5000);
   }
 
   _emit(type, detail = {}) {

@@ -101,6 +101,7 @@ const SYNC_TOAST_THRESHOLD_SEC = 6;
 const SYNC_TOAST_COOLDOWN_MS = 12000;
 const SYNC_RATE_RESET_MS = 2200;
 const FAST_CATCHUP_RATE = 1.04;
+const SLOW_CATCHUP_RATE = 0.985;
 const AUTHORITATIVE_SEEK_WINDOW_MS = 4000;
 const AUTHORITATIVE_SEEK_TOLERANCE_SEC = 1.75;
 const PLAYBACK_FREEZE_THRESHOLD_MS = 2500;
@@ -241,8 +242,9 @@ function nudgePlaybackToward(targetPos, driftSec, signedDrift) {
     return;
   }
   if (signedDrift < -SOFT_SYNC_THRESHOLD_SEC) {
-    clearSyncPlaybackRate();
-    const nudgedPos = clampVideoPosition(movieVideo.currentTime + Math.max(signedDrift * 0.35, -1));
+    movieVideo.playbackRate = SLOW_CATCHUP_RATE;
+    schedulePlaybackRateReset();
+    const nudgedPos = clampVideoPosition(movieVideo.currentTime + Math.max(signedDrift * 0.12, -0.25));
     movieVideo.currentTime = nudgedPos;
     if (driftSec >= SYNC_TOAST_THRESHOLD_SEC) {
       maybeShowSyncToast(`Smoothing sync… (${driftSec.toFixed(1)}s drift)`, driftSec);

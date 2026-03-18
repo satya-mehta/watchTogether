@@ -1,7 +1,7 @@
 const { v4: uuidv4 } = require('uuid');
 
 // ── Tolerance window for sync checks (seconds) ────────────────────────────
-const SYNC_TOLERANCE_SEC = 1.25;
+const SYNC_TOLERANCE_SEC = 2;
 
 // ── Send helper ───────────────────────────────────────────────────────────
 function send(ws, type, payload = {}) {
@@ -174,6 +174,14 @@ function handleConnection(ws, req, roomManager) {
     // against server-authoritative position and nudges if drifted.
     // Client sends: { type:'sync_check', positionSec }
     if (type === 'sync_check') {
+      // Let the current master refresh the authoritative clock using its
+      // actual playback position instead of a blind server-side timer.
+      if (myPeerId === myRoom.playState.masterId) {
+        myRoom.playState.positionSec = msg.positionSec;
+        myRoom.playState.lastUpdatedAt = Date.now();
+        return;
+      }
+
       const serverPos = roomManager.currentPosition(myRoom);
       const drift     = Math.abs(msg.positionSec - serverPos);
 
