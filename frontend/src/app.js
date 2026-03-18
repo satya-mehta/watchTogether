@@ -106,6 +106,21 @@ function setSyncStatus(message, tone = 'idle') {
   if (syncDot) syncDot.className = `sdot ${tone}`;
 }
 
+function getVideoDurationSec() {
+  return Number.isFinite(movieVideo.duration) ? movieVideo.duration : null;
+}
+
+function clampVideoPosition(positionSec) {
+  const safePosition = Math.max(0, Number(positionSec) || 0);
+  const durationSec = getVideoDurationSec();
+  return durationSec == null ? safePosition : Math.min(safePosition, durationSec);
+}
+
+function isAtVideoEnd(positionSec = movieVideo.currentTime) {
+  const durationSec = getVideoDurationSec();
+  return durationSec != null && durationSec > 0 && positionSec >= durationSec - 0.25;
+}
+
 function leaveWatchToLobby({ clearFile = false, keepCall = true, notice = '' } = {}) {
   movieVideo.pause();
   movieVideo.currentTime = 0;
@@ -361,10 +376,12 @@ function wireClientEvents() {
     // Compensate for round-trip latency
     const latencyMs = Date.now() - serverTs;
     const compensatedPos = positionSec + (playing ? latencyMs / 1000 : 0);
+    const targetPos = clampVideoPosition(compensatedPos);
+    const shouldPauseAtEnd = isAtVideoEnd(targetPos);
 
-    movieVideo.currentTime = Math.max(0, compensatedPos);
+    movieVideo.currentTime = targetPos;
     try {
-      if (playing) await movieVideo.play();
+      if (playing && !shouldPauseAtEnd) await movieVideo.play();
       else         movieVideo.pause();
     } catch (e) {
       console.warn('play() blocked by browser autoplay policy:', e.message);
@@ -373,15 +390,18 @@ function wireClientEvents() {
 
   // A seek command from the master peer
   client.on('seek', ({ positionSec }) => {
-    movieVideo.currentTime = positionSec;
+    movieVideo.currentTime = clampVideoPosition(positionSec);
   });
 
   // Server detected drift > 2s — snap back into sync
   client.on('apply_sync', async ({ positionSec, playing }) => {
-    showToast(`Resyncing… (${Math.abs(movieVideo.currentTime - positionSec).toFixed(1)}s drift)`);
-    movieVideo.currentTime = positionSec;
-    if (playing && movieVideo.paused)  await movieVideo.play().catch(() => {});
+    const targetPos = clampVideoPosition(positionSec);
+    const shouldPauseAtEnd = isAtVideoEnd(targetPos);
+    showToast(`Resyncing… (${Math.abs(movieVideo.currentTime - targetPos).toFixed(1)}s drift)`);
+    movieVideo.currentTime = targetPos;
+    if (playing && movieVideo.paused && !shouldPauseAtEnd)  await movieVideo.play().catch(() => {});
     if (!playing && !movieVideo.paused) movieVideo.pause();
+    if (shouldPauseAtEnd && !movieVideo.paused) movieVideo.pause();
   });
 
   // ── Reactions ─────────────────────────────────────────────────────────
@@ -458,9 +478,15 @@ function wireVideoControls() {
     if (!isSeeking && seekBar) seekBar.value = movieVideo.currentTime;
   });
 
+  movieVideo.addEventListener('ended', () => {
+    const finalPosition = clampVideoPosition(movieVideo.duration || movieVideo.currentTime);
+    if (seekBar) seekBar.value = finalPosition;
+    client?.playPause(false, finalPosition);
+  });
+
   // ── Sync heartbeat ───────────────────────────────────────────────────────
   // Tell the client where to read the video position from
-  client.setPositionGetter(() => movieVideo.currentTime);
+  client.setPositionGetter(() => clampVideoPosition(movieVideo.currentTime));
 
   // ── Ready button ─────────────────────────────────────────────────────────
   readyBtn?.addEventListener('click', () => {
