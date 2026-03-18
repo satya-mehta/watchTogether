@@ -19,13 +19,28 @@
  * Signalling is wired automatically via client.sendSignal / client.on('webrtc_signal').
  */
 
-// Public STUN servers — free, no account needed
-// For production add TURN servers (Twilio, Metered, coturn) so peers behind
-// strict NATs can still connect.
+// Public ICE servers.
+// Keep Google's STUN servers first so direct candidates are tried early,
+// then fall back to Open Relay STUN/TURN for stricter NATs and production use.
 const ICE_SERVERS = [
   { urls: 'stun:stun.l.google.com:19302' },
   { urls: 'stun:stun1.l.google.com:19302' },
   { urls: 'stun:stun.cloudflare.com:3478' },
+  {
+    urls: 'turn:openrelay.metered.ca:80',
+    username: 'openrelayproject',
+    credential: 'openrelayproject',
+  },
+  {
+    urls: 'turn:openrelay.metered.ca:443',
+    username: 'openrelayproject',
+    credential: 'openrelayproject',
+  },
+  {
+    urls: 'turn:openrelay.metered.ca:443?transport=tcp',
+    username: 'openrelayproject',
+    credential: 'openrelayproject',
+  },
 ];
 
 export class VideoCall extends EventTarget {

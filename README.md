@@ -224,7 +224,7 @@ call.end();
 
 ### STUN / TURN
 
-The module currently uses public STUN servers. For production use across stricter NATs or mobile/corporate networks, add a TURN server to `ICE_SERVERS` in `src/webrtc.js`.
+The module now tries public STUN servers first and also includes Open Relay STUN/TURN entries for tougher NATs and stricter networks. For a more controlled production deployment, you may still want to replace those with your own TURN service in `src/webrtc.js`.
 
 ## Sync behavior
 
