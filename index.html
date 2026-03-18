@@ -164,7 +164,7 @@ body{font-family:'Nunito',sans-serif;background:var(--bg);color:var(--text);min-
 
 /* PiP bubble — friend's face */
 .pip-bubble{
-  position:absolute;top:20px;right:20px;z-index:10;
+  position:fixed;top:20px;right:20px;z-index:20;
   width:120px;height:86px;border-radius:14px;
   border:1.5px solid rgba(184,169,217,.3);
   min-width:120px;min-height:86px;
@@ -209,6 +209,23 @@ body{font-family:'Nunito',sans-serif;background:var(--bg);color:var(--text);min-
 .master-badge{position:absolute;top:22px;left:20px;z-index:10;background:rgba(99,102,241,.12);border:1px solid rgba(99,102,241,.4);border-radius:24px;padding:7px 14px;font-size:11px;font-weight:700;color:var(--primary);display:none;}
 .master-badge.show{display:block;}
 
+/* Back to lobby */
+.watch-back{
+  position:absolute;top:20px;left:20px;z-index:16;
+  display:flex;align-items:center;gap:8px;
+  padding:8px 14px;
+  border:none;border-radius:999px;
+  background:rgba(15,20,25,.82);
+  color:var(--text);
+  font-family:'Nunito',sans-serif;
+  font-size:13px;font-weight:700;
+  cursor:pointer;
+  border:1px solid rgba(255,255,255,.12);
+  box-shadow:0 10px 30px rgba(0,0,0,.24);
+  transition:background .2s,color .2s,transform .12s;
+}
+.watch-back:hover{background:rgba(24,30,40,.92);color:#fff;transform:translateY(-1px);}
+
 /* Control bar */
 .ctrl-bar{position:absolute;bottom:0;left:0;right:0;z-index:15;padding:0 20px 18px;background:linear-gradient(to top,rgba(0,0,0,.9),transparent);transition:opacity .35s;pointer-events:all;}
 .ctrl-bar.hidden{opacity:0;pointer-events:none;}
@@ -231,7 +248,7 @@ input[type=range]#seek-bar::-webkit-slider-thumb{appearance:none;width:14px;heig
 .chip-dot.ok{background:var(--green);box-shadow:0 0 8px rgba(16,185,129,.7);}
 
 /* Call controls strip (mute / camera / end) */
-#call-controls{display:none;position:absolute;bottom:90px;left:50%;transform:translateX(-50%);z-index:20;gap:10px;align-items:center;background:rgba(20,18,28,.85);border:1px solid var(--border);border-radius:30px;padding:8px 16px;}
+#call-controls{display:none;position:fixed;bottom:24px;left:50%;transform:translateX(-50%);z-index:21;gap:10px;align-items:center;background:rgba(20,18,28,.85);border:1px solid var(--border);border-radius:30px;padding:8px 16px;}
 .call-btn{background:none;border:none;border-radius:50%;width:36px;height:36px;display:flex;align-items:center;justify-content:center;cursor:pointer;color:var(--text);font-size:15px;transition:background .2s,color .2s;}
 .call-btn .material-symbols-outlined{font-size:20px;line-height:1;}
 .call-btn:hover{background:rgba(99,102,241,.12);color:var(--primary);}
@@ -464,22 +481,10 @@ input[type=range]#seek-bar::-webkit-slider-thumb{appearance:none;width:14px;heig
 <!-- ═══ WATCH ════════════════════════════════════════════════════════════ -->
 <div class="screen" id="screen-watch">
 
+  <button class="watch-back" id="watch-back-btn" type="button">← Change file</button>
+
   <!-- Actual movie -->
   <video id="movie-video" preload="metadata"></video>
-
-  <!-- Friend's face (PiP) -->
-  <div class="pip-bubble" id="pip-bubble" style="display:none;">
-    <div class="pip-resize-handle nw" data-resize="nw"></div>
-    <div class="pip-resize-handle ne" data-resize="ne"></div>
-    <div class="pip-resize-handle sw" data-resize="sw"></div>
-    <div class="pip-resize-handle se" data-resize="se"></div>
-    <div class="pip-live">
-      <div class="pip-live-dot"></div>
-      <span class="pip-live-txt">Live</span>
-    </div>
-    <video id="remote-video" autoplay playsinline></video>
-    <video id="local-video" autoplay playsinline muted></video>
-  </div>
 
   <!-- Sync toast -->
   <div class="sync-toast" id="sync-toast"></div>
@@ -495,19 +500,6 @@ input[type=range]#seek-bar::-webkit-slider-thumb{appearance:none;width:14px;heig
     <button class="react-btn" data-reaction="👏">👏</button>
     <button class="react-btn" data-reaction="🥹">🥹</button>
     <button class="react-btn" data-reaction="🌚">🌚</button>
-  </div>
-
-  <!-- Call controls (mute / camera / end) -->
-  <div id="call-controls">
-    <button class="call-btn" id="mute-btn" title="Mute microphone" aria-label="Mute microphone">
-      <span class="material-symbols-outlined" id="mute-icon">mic</span>
-    </button>
-    <button class="call-btn" id="camera-btn" title="Hide camera" aria-label="Hide camera">
-      <span class="material-symbols-outlined" id="camera-icon">videocam</span>
-    </button>
-    <button class="call-btn danger" id="end-call-btn" title="End call" aria-label="End call">
-      <span class="material-symbols-outlined">call_end</span>
-    </button>
   </div>
 
   <!-- Player controls -->
@@ -538,6 +530,31 @@ input[type=range]#seek-bar::-webkit-slider-thumb{appearance:none;width:14px;heig
       </button>
     </div>
   </div>
+</div>
+<!-- Shared call UI -->
+<div class="pip-bubble" id="pip-bubble" style="display:none;">
+  <div class="pip-resize-handle nw" data-resize="nw"></div>
+  <div class="pip-resize-handle ne" data-resize="ne"></div>
+  <div class="pip-resize-handle sw" data-resize="sw"></div>
+  <div class="pip-resize-handle se" data-resize="se"></div>
+  <div class="pip-live">
+    <div class="pip-live-dot"></div>
+    <span class="pip-live-txt">Live</span>
+  </div>
+  <video id="remote-video" autoplay playsinline></video>
+  <video id="local-video" autoplay playsinline muted></video>
+</div>
+
+<div id="call-controls">
+  <button class="call-btn" id="mute-btn" title="Mute microphone" aria-label="Mute microphone">
+    <span class="material-symbols-outlined" id="mute-icon">mic</span>
+  </button>
+  <button class="call-btn" id="camera-btn" title="Hide camera" aria-label="Hide camera">
+    <span class="material-symbols-outlined" id="camera-icon">videocam</span>
+  </button>
+  <button class="call-btn danger" id="end-call-btn" title="End call" aria-label="End call">
+    <span class="material-symbols-outlined">call_end</span>
+  </button>
 </div>
 <div class="countdown-overlay" id="countdown-overlay">
   <div class="cd-avatars">

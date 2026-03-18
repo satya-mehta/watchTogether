@@ -195,6 +195,22 @@ function handleConnection(ws, req, roomManager) {
       return;
     }
 
+    if (type === 'return_to_lobby') {
+      const peer = myRoom.peers.get(myPeerId);
+      if (peer) peer.isReady = false;
+      myRoom.playState.playing = false;
+      myRoom.playState.positionSec = 0;
+      myRoom.playState.lastUpdatedAt = Date.now();
+
+      broadcast(myRoom, 'return_to_lobby', {
+        peerId: myPeerId,
+        name: peer?.name || 'Your friend',
+      }, myPeerId);
+      broadcast(myRoom, 'peer_ready', { peerId: myPeerId, isReady: false });
+      console.log(`[Sync] ${myRoom.code} returning both peers to lobby`);
+      return;
+    }
+
     // ── WebRTC signalling pass-through ────────────────────────────────────
     // Relay SDP offer/answer and ICE candidates between peers for WebRTC
     // Client sends: { type:'webrtc_signal', signal: { type, sdp? / candidate? } }

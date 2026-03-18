@@ -20,6 +20,7 @@ const cameraBtn     = document.getElementById('camera-btn');
 const endCallBtn    = document.getElementById('end-call-btn');
 const muteIcon      = document.getElementById('mute-icon');
 const cameraIcon    = document.getElementById('camera-icon');
+const watchBackBtn  = document.getElementById('watch-back-btn');
 
 const createRoomBtn = document.getElementById('create-room-btn');
 const joinRoomBtn   = document.getElementById('join-room-btn');
@@ -33,11 +34,73 @@ const reactionBtns  = document.querySelectorAll('[data-reaction]');
 // ── App state ─────────────────────────────────────────────────────────────
 let client   = null;
 let call     = null;
+let callStarting = false;
 let isHost   = false;
 let myName   = 'You';
 let myFileName = null;
 let roomCode = null;
 let peerPresent = false;
+
+function resetReadyState({ disable = true } = {}) {
+  if (!readyBtn) return;
+  readyBtn.dataset.ready = 'false';
+  readyBtn.textContent = "I'm ready 🍿";
+  readyBtn.classList.remove('active');
+  readyBtn.disabled = disable;
+}
+
+function clearOwnFileSelection() {
+  const yourFileDrop = document.getElementById('your-file-drop');
+  const yourFileLabel = document.getElementById('your-file-label');
+  const yourIconEl = document.querySelector('#your-file-drop .fd-icon');
+  if (yourFileDrop) yourFileDrop.classList.remove('loaded');
+  if (yourFileLabel) yourFileLabel.innerHTML = 'Tap to pick<br>your video file';
+  if (yourIconEl) yourIconEl.textContent = '🎬';
+}
+
+function setSyncStatus(message, tone = 'idle') {
+  const syncLabel = document.getElementById('sync-label');
+  const syncDot = document.getElementById('sync-dot');
+  if (syncLabel) syncLabel.textContent = message;
+  if (syncDot) syncDot.className = `sdot ${tone}`;
+}
+
+function leaveWatchToLobby({ clearFile = false, keepCall = true, notice = '' } = {}) {
+  movieVideo.pause();
+  movieVideo.currentTime = 0;
+  if (clearFile) {
+    movieVideo.removeAttribute('src');
+    movieVideo.load();
+    myFileName = null;
+    if (fileInput) fileInput.value = '';
+    clearOwnFileSelection();
+  }
+  if (!keepCall) {
+    call?.end();
+    call = null;
+    showCallUI(false);
+  } else if (call) {
+    showCallUI(true);
+  }
+  showLobby(roomCode);
+  resetReadyState({ disable: true });
+  client?.setReady(false);
+  setSyncStatus(notice || (clearFile ? 'Pick your video file to check for sync' : 'Your friend is choosing a different file.'), clearFile ? 'idle' : 'warn');
+}
+
+function getPeerDisplayName() {
+  return document.getElementById('friend-name')?.textContent?.trim() || 'Your friend';
+}
+
+async function ensureVideoCall() {
+  if (!client || call || callStarting || !peerPresent) return;
+  callStarting = true;
+  try {
+    await startVideoCall();
+  } finally {
+    callStarting = false;
+  }
+}
 
 function normalizeRoomCode(value) {
   return value.trim().replace(/^\/+|\/+$/g, '').toUpperCase();
@@ -172,33 +235,44 @@ function wireClientEvents() {
         }
       }
     });
+    if (peerPresent) ensureVideoCall();
   });
 
   client.on('peer_joined', (data) => {
     peerPresent = true;
     showToast(`${data.name} joined the room 🎉`);
     addPeerToUI(data);
+    ensureVideoCall();
   });
 
   client.on('peer_left', (data) => {
     peerPresent = false;
     showToast(`${data.name} left the room`);
     removePeerFromUI(data.peerId);
+    call?.end();
+    call = null;
     // Video auto-pauses server-side; mirror it here
     movieVideo.pause();
+    setSyncStatus('Waiting for your friend to join', 'idle');
   });
 
   // ── File loading ─────────────────────────────────────────────────────────
   client.on('peer_file_ready', (data) => {
     updatePeerFileStatus(data.peerId, data.durationSec, data.fileName);
+    resetReadyState({ disable: true });
+    setSyncStatus(`${getPeerDisplayName()} changed their file. Re-check sync before starting.`, 'warn');
+    const fileLabel = data.fileName ? ` "${data.fileName}"` : '';
+    showToast(`${getPeerDisplayName()} picked a different file${fileLabel}`, 'info');
   });
 
   client.on('duration_check', ({ match, diff }) => {
     if (match) {
       showToast('Files match ✓ — same movie confirmed', 'success');
       readyBtn.disabled = false;
+      setSyncStatus('Files match. Both of you can get ready.', 'ok');
     } else {
       showToast(`Duration mismatch: ${diff.toFixed(1)}s difference — check your files`, 'warn');
+      setSyncStatus(`Duration mismatch: ${diff.toFixed(1)}s difference — check your files`, 'warn');
     }
   });
 
@@ -211,9 +285,17 @@ function wireClientEvents() {
     movieVideo.currentTime = positionSec;
     startCountdown(() => {
       showWatchScreen();
-      // Countdown finished — host initiates call, guest auto-answers
-      startVideoCall();
+      showCallUI(!!call);
     });
+  });
+
+  client.on('return_to_lobby', ({ name }) => {
+    leaveWatchToLobby({
+      clearFile: false,
+      keepCall: true,
+      notice: `${name || getPeerDisplayName()} went back to pick a different file.`
+    });
+    showToast(`${name || getPeerDisplayName()} went back to file selection`, 'info');
   });
 
   // ── Playback sync ────────────────────────────────────────────────────────
@@ -262,7 +344,11 @@ function wireVideoControls() {
   fileInput?.addEventListener('change', (e) => {
     const file = e.target.files[0];
     if (!file) return;
+    const isNewSelection = myFileName && myFileName !== file.name;
     myFileName = file.name;
+    resetReadyState({ disable: true });
+    client?.setReady(false);
+    setSyncStatus('Checking your new file against your friend\'s copy…', 'idle');
     movieVideo.src = URL.createObjectURL(file);
     movieVideo.addEventListener('loadedmetadata', () => {
       client.fileReady(movieVideo.duration, file.name);
@@ -271,6 +357,10 @@ function wireVideoControls() {
       const yourIconEl = document.querySelector('#your-file-drop .fd-icon');
       if (yourIconEl) {
         yourIconEl.textContent = '✅';
+      }
+      setSyncStatus('Waiting for your friend to load the same file', 'idle');
+      if (isNewSelection) {
+        showToast('New file selected. Waiting for your friend to re-check sync.');
       }
     }, { once: true });
   });
@@ -334,6 +424,7 @@ function wireVideoControls() {
 // ═════════════════════════════════════════════════════════════════════════════
 
 async function startVideoCall() {
+  if (call) return call;
   call = new VideoCall(client, localVideo, remoteVideo);
 
   call
@@ -352,10 +443,12 @@ async function startVideoCall() {
     })
     .on('ended', () => {
       showCallUI(false);
+      call = null;
     });
 
   // Host is the WebRTC offer initiator; guest auto-answers via 'peer_joined' signal
   await call.start(isHost);
+  return call;
 }
 
 // ── Mute button ─────────────────────────────────────────────────────────────
@@ -385,6 +478,15 @@ cameraBtn?.addEventListener('click', () => {
 endCallBtn?.addEventListener('click', () => {
   call?.end();
   call = null;
+});
+
+watchBackBtn?.addEventListener('click', () => {
+  client?.returnToLobby();
+  leaveWatchToLobby({
+    clearFile: true,
+    keepCall: true,
+    notice: 'Pick your video file to check for sync'
+  });
 });
 
 // ═════════════════════════════════════════════════════════════════════════════
@@ -425,6 +527,7 @@ function spawnFloatingReaction(emoji) {
 function showLobby(code) {
   clearLandingNotice();
   document.getElementById('screen-landing')?.classList.remove('active');
+  document.getElementById('screen-watch')?.classList.remove('active');
   document.getElementById('screen-lobby')?.classList.add('active');
   const codeEl = document.getElementById('lobby-room-code');
   if (codeEl) codeEl.textContent = code;

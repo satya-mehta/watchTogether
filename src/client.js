@@ -110,6 +110,11 @@ class WatchTogetherClient extends EventTarget {
     this._send('webrtc_signal', { signal });
   }
 
+  /** Ask the other peer to return to the lobby. */
+  returnToLobby() {
+    this._send('return_to_lobby');
+  }
+
   /**
    * Register the function that returns the current video position.
    * Used for periodic sync checks.
@@ -196,6 +201,10 @@ class WatchTogetherClient extends EventTarget {
 
       case 'webrtc_signal':
         this._emit('webrtc_signal', rest);
+        break;
+
+      case 'return_to_lobby':
+        this._emit('return_to_lobby', rest);
         break;
 
       case 'error':
