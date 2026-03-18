@@ -94,6 +94,7 @@ let lastPlaybackProgressAt = 0;
 let lastRenderedFrameAt = 0;
 let lastFreezeRecoveryAt = 0;
 let freezeRecoveryCount = 0;
+let lastSentPlayPauseCommand = null;
 
 const SOFT_SYNC_THRESHOLD_SEC = 0.8;
 const HARD_SYNC_THRESHOLD_SEC = 4;
@@ -106,6 +107,7 @@ const AUTHORITATIVE_SEEK_WINDOW_MS = 4000;
 const AUTHORITATIVE_SEEK_TOLERANCE_SEC = 1.75;
 const PLAYBACK_FREEZE_THRESHOLD_MS = 2500;
 const PLAYBACK_RECOVERY_COOLDOWN_MS = 1800;
+const CONTROL_DEDUPE_WINDOW_MS = 300;
 
 function resetReadyState({ disable = true } = {}) {
   if (!readyBtn) return;
@@ -210,6 +212,29 @@ function maybeShowSyncToast(message, driftSec) {
   if (now < syncToastCooldownUntil) return;
   syncToastCooldownUntil = now + SYNC_TOAST_COOLDOWN_MS;
   showToast(message, 'info');
+}
+
+function isWatchScreenActive() {
+  return document.getElementById('screen-watch')?.classList.contains('active') ?? false;
+}
+
+function shouldSendSyncHeartbeat() {
+  return Boolean(client && peerPresent && movieVideo.src && isWatchScreenActive());
+}
+
+function sendPlayPauseCommand(playing, positionSec) {
+  const targetPos = clampVideoPosition(positionSec);
+  const now = Date.now();
+  if (
+    lastSentPlayPauseCommand &&
+    lastSentPlayPauseCommand.playing === playing &&
+    Math.abs(lastSentPlayPauseCommand.positionSec - targetPos) < 0.05 &&
+    now - lastSentPlayPauseCommand.at < CONTROL_DEDUPE_WINDOW_MS
+  ) {
+    return;
+  }
+  lastSentPlayPauseCommand = { playing, positionSec: targetPos, at: now };
+  client?.playPause(playing, targetPos);
 }
 
 async function ensureMoviePlaying({ source = 'sync', showHint = false } = {}) {
@@ -708,7 +733,9 @@ function wireClientEvents() {
 // ═════════════════════════════════════════════════════════════════════════════
 
 function wireVideoControls() {
-  client.setPositionGetter(() => clampVideoPosition(movieVideo.currentTime));
+  client.setPositionGetter(() => (
+    shouldSendSyncHeartbeat() ? clampVideoPosition(movieVideo.currentTime) : null
+  ));
   if (videoControlsWired) return;
   videoControlsWired = true;
   playbackHealthTimer = window.setInterval(checkPlaybackHealth, 1000);
@@ -748,7 +775,7 @@ function wireVideoControls() {
     if (nowPlaying) movieVideo.pause();
     else            ensureMoviePlaying({ source: 'local-control', showHint: true });
     // Tell server/peer (we become master for this action)
-    client.playPause(!nowPlaying, movieVideo.currentTime);
+    sendPlayPauseCommand(!nowPlaying, movieVideo.currentTime);
   });
 
   // Keyboard shortcut: space bar
@@ -818,7 +845,7 @@ function wireVideoControls() {
     clearSyncPlaybackRate();
     const finalPosition = clampVideoPosition(movieVideo.duration || movieVideo.currentTime);
     if (seekBar) seekBar.value = finalPosition;
-    client?.playPause(false, finalPosition);
+    sendPlayPauseCommand(false, finalPosition);
   });
 
   movieVideo.addEventListener('waiting', () => {
