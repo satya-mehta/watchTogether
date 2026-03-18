@@ -2,20 +2,26 @@
 
 Real-time watch party app for syncing local video playback between two people, with lobby readiness, reactions, shareable room links, and a peer-to-peer WebRTC video call.
 
-The Node server serves both the API/WebSocket backend and the frontend UI.
+The project is split into a static frontend and a separate Node/WebSocket backend so you can deploy the UI to Vercel and the server to Render.
 
 ## Quick start
 
+Backend:
+
 ```bash
+cd backend
 npm install
 npm run dev
 # or
 npm start
 ```
 
-Open [http://localhost:3001](http://localhost:3001) in your browser.
+Frontend:
 
-- App URL: `http://localhost:3001`
+- Open `frontend/index.html` locally with a static server, or deploy `frontend/` to Vercel.
+- Point `frontend/config.js` at your deployed backend URL when frontend and backend are on different domains.
+
+- Backend URL: `http://localhost:3001`
 - WebSocket endpoint: `ws://localhost:3001/ws`
 - Health check: `http://localhost:3001/health`
 
@@ -30,22 +36,22 @@ Open [http://localhost:3001](http://localhost:3001) in your browser.
 
 ## Screenshots
 
-![Homepage](/assets/screenshots/ss01.png)
+![Homepage](frontend/assets/screenshots/ss01.png)
 <p align="center">Dashboard Screenshot</p>
 
 ---
 
-![Guide](/assets/screenshots/ss02.png)
+![Guide](frontend/assets/screenshots/ss02.png)
 <p align="center">New User Guide Screenshot</p>
 
 ---
 
-![Lobby](/assets/screenshots/ss03.png)
+![Lobby](frontend/assets/screenshots/ss03.png)
 <p align="center">Lobby Screenshot</p>
 
 ---
 
-![Player](/assets/screenshots/ss04.png)
+![Player](frontend/assets/screenshots/ss04.png)
 <p align="center">Player Screenshot</p>
 
 ---
@@ -53,7 +59,7 @@ Open [http://localhost:3001](http://localhost:3001) in your browser.
 ## Architecture
 
 ```text
-Browser A (host)          Node server                 Browser B (guest)
+Browser A (Vercel)        Render backend              Browser B (Vercel)
      |                        |                             |
      |── POST /api/rooms ────►|                             |
      |◄── { roomCode } ───────|                             |
@@ -87,15 +93,21 @@ Browser A (host)          Node server                 Browser B (guest)
 
 ```text
 .
-├── index.html          # frontend UI
-├── src/
-│   ├── app.js          # browser app logic
-│   ├── client.js       # websocket client SDK
-│   ├── index.js        # express + ws server entrypoint
-│   ├── roomManager.js  # in-memory room state
-│   ├── webrtc.js       # peer-to-peer video call module
-│   └── wsHandler.js    # websocket protocol handling
-└── assets/screenshots/ # README images
+├── frontend/
+│   ├── config.js       # frontend -> backend URL config
+│   ├── index.html      # frontend UI
+│   ├── vercel.json     # room-link rewrite to index.html
+│   ├── assets/
+│   └── src/
+│       ├── app.js      # browser app logic
+│       ├── client.js   # websocket client SDK
+│       └── webrtc.js   # peer-to-peer video call module
+└── backend/
+    ├── app.js          # express app and REST routes
+    ├── index.js        # http + websocket server entrypoint
+    ├── roomManager.js  # in-memory room state
+    ├── wsHandler.js    # websocket protocol handling
+    └── package.json
 ```
 
 ## REST API
@@ -147,7 +159,7 @@ Browser A (host)          Node server                 Browser B (guest)
 import { WatchTogetherClient } from './src/client.js';
 
 const client = new WatchTogetherClient(
-  `${location.protocol === 'https:' ? 'wss:' : 'ws:'}//${location.host}/ws`
+  `${(window.WATCH_TOGETHER_CONFIG?.wsBaseUrl || location.origin).replace(/^http:/, 'ws:').replace(/^https:/, 'wss:')}/ws`
 );
 
 await client.connect();
@@ -183,7 +195,7 @@ client.on('reaction', ({ emoji }) => {
 
 ## WebRTC video call
 
-`src/webrtc.js` provides a peer-to-peer call layer on top of the same WebSocket connection. The server only relays signaling messages; audio and video flow directly between browsers after negotiation succeeds.
+`frontend/src/webrtc.js` provides a peer-to-peer call layer on top of the same WebSocket connection. The server only relays signaling messages; audio and video flow directly between browsers after negotiation succeeds.
 
 ### Usage
 
@@ -224,7 +236,7 @@ call.end();
 
 ### STUN / TURN
 
-The module now tries public STUN servers first and also includes Open Relay STUN/TURN entries for tougher NATs and stricter networks. For a more controlled production deployment, you may still want to replace those with your own TURN service in `src/webrtc.js`.
+The module now tries public STUN servers first and also includes Open Relay STUN/TURN entries for tougher NATs and stricter networks. For a more controlled production deployment, you may still want to replace those with your own TURN service in `frontend/src/webrtc.js`.
 
 ## Sync behavior
 
@@ -240,3 +252,4 @@ The module now tries public STUN servers first and also includes Open Relay STUN
 - Rooms are stored in memory only.
 - Each room supports up to 2 peers.
 - Room links such as `/COOL-1234` open the same frontend and auto-join flow.
+- For split deploys, set `frontend/config.js` to your Render backend URL.

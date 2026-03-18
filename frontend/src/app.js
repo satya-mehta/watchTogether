@@ -3,8 +3,21 @@ import { WatchTogetherClient } from './client.js';
 import { VideoCall } from './webrtc.js';
 
 // ── Config ────────────────────────────────────────────────────────────────
-const SERVER_ORIGIN = window.location.origin;
-const SERVER_URL = `${window.location.protocol === 'https:' ? 'wss:' : 'ws:'}//${window.location.host}/ws`;
+const APP_CONFIG = window.WATCH_TOGETHER_CONFIG ?? {};
+
+function normalizeBaseUrl(value) {
+  return typeof value === 'string' ? value.trim().replace(/\/+$/g, '') : '';
+}
+
+function deriveWsBaseUrl(httpBaseUrl) {
+  if (!httpBaseUrl) return '';
+  return httpBaseUrl.replace(/^http:/i, 'ws:').replace(/^https:/i, 'wss:');
+}
+
+const API_BASE_URL = normalizeBaseUrl(APP_CONFIG.apiBaseUrl) || window.location.origin;
+const WS_BASE_URL = normalizeBaseUrl(APP_CONFIG.wsBaseUrl) || deriveWsBaseUrl(API_BASE_URL);
+const SERVER_ORIGIN = API_BASE_URL;
+const SERVER_URL = `${WS_BASE_URL}/ws`;
 
 // ── DOM references ─────────────────────────────────────────────────────────
 const movieVideo    = document.getElementById('movie-video');     // <video> for the movie file
