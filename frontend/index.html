@@ -607,13 +607,24 @@ input[type=range]#seek-bar::-webkit-slider-thumb{appearance:none;width:14px;heig
 
   // Fullscreen
   document.getElementById('fullscreen-btn').addEventListener('click', () => {
-    if (!document.fullscreenElement) document.getElementById('screen-watch').requestFullscreen?.();
+    if (!document.fullscreenElement) {
+      const fullscreenTarget = document.documentElement.requestFullscreen ? document.documentElement : document.getElementById('screen-watch');
+      fullscreenTarget?.requestFullscreen?.();
+    }
     else document.exitFullscreen?.();
   });
 
   // Skip ±10s
-  document.getElementById('skip-back-btn').addEventListener('click', () => { mov.currentTime = Math.max(0, mov.currentTime-10); });
-  document.getElementById('skip-fwd-btn').addEventListener('click', () => { mov.currentTime = Math.min(mov.duration||Infinity, mov.currentTime+10); });
+  document.getElementById('skip-back-btn').addEventListener('click', () => {
+    const nextPos = Math.max(0, mov.currentTime - 10);
+    mov.currentTime = nextPos;
+    window.handleExplicitSeekChange?.(nextPos);
+  });
+  document.getElementById('skip-fwd-btn').addEventListener('click', () => {
+    const nextPos = Math.min(mov.duration || Infinity, mov.currentTime + 10);
+    mov.currentTime = nextPos;
+    window.handleExplicitSeekChange?.(nextPos);
+  });
 
   // Control bar fade on mouse idle
   let hideTimer;

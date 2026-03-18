@@ -84,14 +84,19 @@ let peerPresent = false;
 let createRoomPending = false;
 let syncPlaybackRateTimer = null;
 let syncToastCooldownUntil = 0;
+let playbackRetryPending = false;
+let videoControlsWired = false;
+let reactionsWired = false;
+let recentAuthoritativeSeek = null;
 
 const SOFT_SYNC_THRESHOLD_SEC = 0.8;
 const HARD_SYNC_THRESHOLD_SEC = 4;
 const SYNC_TOAST_THRESHOLD_SEC = 6;
 const SYNC_TOAST_COOLDOWN_MS = 12000;
 const SYNC_RATE_RESET_MS = 2200;
-const FAST_CATCHUP_RATE = 1.08;
-const SLOW_CATCHUP_RATE = 0.94;
+const FAST_CATCHUP_RATE = 1.04;
+const AUTHORITATIVE_SEEK_WINDOW_MS = 4000;
+const AUTHORITATIVE_SEEK_TOLERANCE_SEC = 1.75;
 
 function resetReadyState({ disable = true } = {}) {
   if (!readyBtn) return;
@@ -153,6 +158,25 @@ function getCompensatedSyncPosition(positionSec, playing, serverTs) {
   return clampVideoPosition(basePos + latencySec);
 }
 
+function rememberAuthoritativeSeek(positionSec, playing = !movieVideo.paused) {
+  recentAuthoritativeSeek = {
+    positionSec: clampVideoPosition(positionSec),
+    playing,
+    at: Date.now(),
+  };
+}
+
+function getAuthoritativeSeekTarget() {
+  if (!recentAuthoritativeSeek) return null;
+  const ageMs = Date.now() - recentAuthoritativeSeek.at;
+  if (ageMs > AUTHORITATIVE_SEEK_WINDOW_MS) {
+    recentAuthoritativeSeek = null;
+    return null;
+  }
+  const elapsedSec = recentAuthoritativeSeek.playing ? ageMs / 1000 : 0;
+  return clampVideoPosition(recentAuthoritativeSeek.positionSec + elapsedSec);
+}
+
 function maybeShowSyncToast(message, driftSec) {
   if (driftSec < SYNC_TOAST_THRESHOLD_SEC) return;
   const now = Date.now();
@@ -160,6 +184,55 @@ function maybeShowSyncToast(message, driftSec) {
   syncToastCooldownUntil = now + SYNC_TOAST_COOLDOWN_MS;
   showToast(message, 'info');
 }
+
+async function ensureMoviePlaying({ source = 'sync', showHint = false } = {}) {
+  if (movieVideo.paused) {
+    try {
+      await movieVideo.play();
+      playbackRetryPending = false;
+      return true;
+    } catch (err) {
+      playbackRetryPending = true;
+      console.warn(`[Playback] play() failed during ${source}:`, err?.message || err);
+      if (showHint) {
+        showToast('Tap play if your browser paused the video', 'info');
+      }
+      return false;
+    }
+  }
+  playbackRetryPending = false;
+  return true;
+}
+
+function nudgePlaybackToward(targetPos, driftSec, signedDrift) {
+  if (signedDrift > SOFT_SYNC_THRESHOLD_SEC) {
+    movieVideo.playbackRate = FAST_CATCHUP_RATE;
+    schedulePlaybackRateReset();
+    return;
+  }
+  if (signedDrift < -SOFT_SYNC_THRESHOLD_SEC) {
+    clearSyncPlaybackRate();
+    const nudgedPos = clampVideoPosition(movieVideo.currentTime + Math.max(signedDrift * 0.35, -1));
+    movieVideo.currentTime = nudgedPos;
+    if (driftSec >= SYNC_TOAST_THRESHOLD_SEC) {
+      maybeShowSyncToast(`Smoothing sync… (${driftSec.toFixed(1)}s drift)`, driftSec);
+    }
+    return;
+  }
+  clearSyncPlaybackRate();
+}
+
+function applyExplicitSeek(positionSec, { broadcast = true } = {}) {
+  const targetPos = clampVideoPosition(positionSec);
+  clearSyncPlaybackRate();
+  movieVideo.currentTime = targetPos;
+  rememberAuthoritativeSeek(targetPos, !movieVideo.paused);
+  if (broadcast) client?.seek(targetPos);
+}
+
+window.handleExplicitSeekChange = (positionSec) => {
+  applyExplicitSeek(positionSec);
+};
 
 function applyHardSync({ targetPos, playing, announce = false, driftSec = 0 }) {
   clearSyncPlaybackRate();
@@ -169,7 +242,7 @@ function applyHardSync({ targetPos, playing, announce = false, driftSec = 0 }) {
   }
   const shouldPauseAtEnd = isAtVideoEnd(targetPos);
   if (playing && !shouldPauseAtEnd) {
-    movieVideo.play().catch(() => {});
+    ensureMoviePlaying({ source: 'hard-sync', showHint: true });
   } else {
     movieVideo.pause();
   }
@@ -185,6 +258,21 @@ async function handleSyncCorrection({ positionSec, playing, serverTs, drift, sou
   if (source === 'sync' && playing && targetPos < 0.5 && localPos > 5) {
     console.warn('[Sync] Ignoring suspicious reset-to-zero correction', { targetPos, localPos, driftSec });
     return;
+  }
+
+  if (source === 'sync') {
+    const authoritativeSeekTarget = getAuthoritativeSeekTarget();
+    if (
+      authoritativeSeekTarget != null &&
+      Math.abs(targetPos - authoritativeSeekTarget) > AUTHORITATIVE_SEEK_TOLERANCE_SEC
+    ) {
+      console.warn('[Sync] Ignoring stale correction after explicit seek', {
+        targetPos,
+        authoritativeSeekTarget,
+        driftSec,
+      });
+      return;
+    }
   }
 
   if (!playing) {
@@ -206,13 +294,13 @@ async function handleSyncCorrection({ positionSec, playing, serverTs, drift, sou
 
   if (movieVideo.seeking) return;
 
-  if (driftSec >= HARD_SYNC_THRESHOLD_SEC || movieVideo.readyState < HTMLMediaElement.HAVE_FUTURE_DATA) {
+  if (driftSec >= HARD_SYNC_THRESHOLD_SEC) {
     applyHardSync({ targetPos, playing: true, announce: true, driftSec });
     return;
   }
 
   if (movieVideo.paused) {
-    applyHardSync({ targetPos, playing: true, announce: false, driftSec });
+    await ensureMoviePlaying({ source: 'sync-resume', showHint: true });
     return;
   }
 
@@ -221,8 +309,7 @@ async function handleSyncCorrection({ positionSec, playing, serverTs, drift, sou
     return;
   }
 
-  movieVideo.playbackRate = signedDrift > 0 ? FAST_CATCHUP_RATE : SLOW_CATCHUP_RATE;
-  schedulePlaybackRateReset();
+  nudgePlaybackToward(targetPos, driftSec, signedDrift);
 }
 
 function leaveWatchToLobby({ clearFile = false, keepCall = true, notice = '' } = {}) {
@@ -448,6 +535,7 @@ function wireClientEvents() {
     removePeerFromUI(data.peerId);
     call?.end();
     call = null;
+    clearSyncPlaybackRate();
     // Video auto-pauses server-side; mirror it here
     movieVideo.pause();
     setSyncStatus('Waiting for your friend to join', 'idle');
@@ -508,8 +596,7 @@ function wireClientEvents() {
 
   // A seek command from the master peer
   client.on('seek', ({ positionSec }) => {
-    clearSyncPlaybackRate();
-    movieVideo.currentTime = clampVideoPosition(positionSec);
+    applyExplicitSeek(positionSec, { broadcast: false });
   });
 
   client.on('sync_nudge', async ({ positionSec, playing, serverTs, drift }) => {
@@ -531,6 +618,9 @@ function wireClientEvents() {
 // ═════════════════════════════════════════════════════════════════════════════
 
 function wireVideoControls() {
+  client.setPositionGetter(() => clampVideoPosition(movieVideo.currentTime));
+  if (videoControlsWired) return;
+  videoControlsWired = true;
 
   // File picker → load into <video> and tell server
   fileInput?.addEventListener('change', (e) => {
@@ -563,7 +653,7 @@ function wireVideoControls() {
     clearSyncPlaybackRate();
     // Toggle locally first for snappy feel
     if (nowPlaying) movieVideo.pause();
-    else            movieVideo.play().catch(() => {});
+    else            ensureMoviePlaying({ source: 'local-control', showHint: true });
     // Tell server/peer (we become master for this action)
     client.playPause(!nowPlaying, movieVideo.currentTime);
   });
@@ -578,19 +668,37 @@ function wireVideoControls() {
 
   // ── Seek bar ─────────────────────────────────────────────────────────────
   let isSeeking = false;
+  let lastCommittedSeekValue = null;
+  let lastCommittedSeekAt = 0;
 
+  const commitSeekBarChange = () => {
+    if (!seekBar) return;
+    const targetPos = clampVideoPosition(Number(seekBar.value));
+    const now = Date.now();
+    isSeeking = false;
+    if (
+      lastCommittedSeekValue != null &&
+      Math.abs(targetPos - lastCommittedSeekValue) < 0.01 &&
+      now - lastCommittedSeekAt < 300
+    ) {
+      return;
+    }
+    lastCommittedSeekValue = targetPos;
+    lastCommittedSeekAt = now;
+    applyExplicitSeek(targetPos);
+  };
+
+  seekBar?.addEventListener('pointerdown', () => { isSeeking = true; });
   seekBar?.addEventListener('mousedown', () => { isSeeking = true; });
+  seekBar?.addEventListener('touchstart', () => { isSeeking = true; }, { passive: true });
 
   seekBar?.addEventListener('input', () => {
     clearSyncPlaybackRate();
     movieVideo.currentTime = Number(seekBar.value);
   });
 
-  seekBar?.addEventListener('mouseup', () => {
-    isSeeking = false;
-    clearSyncPlaybackRate();
-    client.seek(movieVideo.currentTime);  // broadcast final position
-  });
+  seekBar?.addEventListener('change', commitSeekBarChange);
+  seekBar?.addEventListener('pointerup', commitSeekBarChange);
 
   // Keep seek bar in sync with playback
   movieVideo.addEventListener('timeupdate', () => {
@@ -606,15 +714,27 @@ function wireVideoControls() {
 
   movieVideo.addEventListener('waiting', () => {
     clearSyncPlaybackRate();
+    if (!movieVideo.paused) ensureMoviePlaying({ source: 'waiting', showHint: false });
   });
 
   movieVideo.addEventListener('stalled', () => {
     clearSyncPlaybackRate();
+    if (!movieVideo.paused) ensureMoviePlaying({ source: 'stalled', showHint: false });
   });
 
-  // ── Sync heartbeat ───────────────────────────────────────────────────────
-  // Tell the client where to read the video position from
-  client.setPositionGetter(() => clampVideoPosition(movieVideo.currentTime));
+  movieVideo.addEventListener('pause', () => {
+    if (!isAtVideoEnd() && playbackRetryPending) {
+      showToast('Tap play to resume', 'info');
+    }
+  });
+
+  document.addEventListener('pointerup', retryPendingPlayback, true);
+  document.addEventListener('touchend', retryPendingPlayback, true);
+  document.addEventListener('keydown', retryPendingPlayback, true);
+  document.addEventListener('fullscreenchange', retryPendingPlayback, true);
+  document.addEventListener('visibilitychange', () => {
+    if (!document.hidden) retryPendingPlayback();
+  }, true);
 
   // ── Ready button ─────────────────────────────────────────────────────────
   readyBtn?.addEventListener('click', () => {
@@ -659,6 +779,11 @@ async function startVideoCall() {
   // Host is the WebRTC offer initiator; guest auto-answers via 'peer_joined' signal
   await call.start(isHost);
   return call;
+}
+
+function retryPendingPlayback() {
+  if (!playbackRetryPending || !movieVideo.paused) return;
+  ensureMoviePlaying({ source: 'user-gesture-resume', showHint: false });
 }
 
 // ── Mute button ─────────────────────────────────────────────────────────────
@@ -708,6 +833,8 @@ lobbyBackBtn?.addEventListener('click', () => {
 // ═════════════════════════════════════════════════════════════════════════════
 
 function wireReactions() {
+  if (reactionsWired) return;
+  reactionsWired = true;
   reactionBtns.forEach(btn => {
     btn.addEventListener('click', () => {
       const emoji = btn.dataset.reaction;
