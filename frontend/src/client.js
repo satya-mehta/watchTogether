@@ -10,10 +10,7 @@
  */
 
 // How often to send a sync heartbeat (ms)
-const SYNC_INTERVAL_MS = 5000;
-
-// How many seconds of drift are acceptable before we nudge ourselves
-const DRIFT_TOLERANCE = 2;
+const SYNC_INTERVAL_MS = 2500;
 
 class WatchTogetherClient extends EventTarget {
   constructor(serverUrl) {
@@ -197,10 +194,6 @@ class WatchTogetherClient extends EventTarget {
       // ── Server tells us we've drifted ─────────────────────────────────
       case 'sync_nudge':
         this._emit('sync_nudge', rest);
-        // Auto-apply if drift is significant
-        if (Math.abs(rest.drift) > DRIFT_TOLERANCE) {
-          this._emit('apply_sync', { positionSec: rest.positionSec, playing: rest.playing });
-        }
         break;
 
       case 'reaction':

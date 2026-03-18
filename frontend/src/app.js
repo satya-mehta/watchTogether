@@ -82,6 +82,16 @@ let myFileName = null;
 let roomCode = null;
 let peerPresent = false;
 let createRoomPending = false;
+let syncPlaybackRateTimer = null;
+let syncToastCooldownUntil = 0;
+
+const SOFT_SYNC_THRESHOLD_SEC = 0.8;
+const HARD_SYNC_THRESHOLD_SEC = 4;
+const SYNC_TOAST_THRESHOLD_SEC = 6;
+const SYNC_TOAST_COOLDOWN_MS = 12000;
+const SYNC_RATE_RESET_MS = 2200;
+const FAST_CATCHUP_RATE = 1.08;
+const SLOW_CATCHUP_RATE = 0.94;
 
 function resetReadyState({ disable = true } = {}) {
   if (!readyBtn) return;
@@ -122,7 +132,101 @@ function isAtVideoEnd(positionSec = movieVideo.currentTime) {
   return durationSec != null && durationSec > 0 && positionSec >= durationSec - 0.25;
 }
 
+function clearSyncPlaybackRate() {
+  clearTimeout(syncPlaybackRateTimer);
+  syncPlaybackRateTimer = null;
+  if (movieVideo.playbackRate !== 1) movieVideo.playbackRate = 1;
+}
+
+function schedulePlaybackRateReset() {
+  clearTimeout(syncPlaybackRateTimer);
+  syncPlaybackRateTimer = setTimeout(() => {
+    movieVideo.playbackRate = 1;
+    syncPlaybackRateTimer = null;
+  }, SYNC_RATE_RESET_MS);
+}
+
+function getCompensatedSyncPosition(positionSec, playing, serverTs) {
+  const basePos = clampVideoPosition(positionSec);
+  if (!playing || typeof serverTs !== 'number') return basePos;
+  const latencySec = Math.max(0, Date.now() - serverTs) / 1000;
+  return clampVideoPosition(basePos + latencySec);
+}
+
+function maybeShowSyncToast(message, driftSec) {
+  if (driftSec < SYNC_TOAST_THRESHOLD_SEC) return;
+  const now = Date.now();
+  if (now < syncToastCooldownUntil) return;
+  syncToastCooldownUntil = now + SYNC_TOAST_COOLDOWN_MS;
+  showToast(message, 'info');
+}
+
+function applyHardSync({ targetPos, playing, announce = false, driftSec = 0 }) {
+  clearSyncPlaybackRate();
+  movieVideo.currentTime = targetPos;
+  if (announce) {
+    maybeShowSyncToast(`Resyncing… (${driftSec.toFixed(1)}s drift)`, driftSec);
+  }
+  const shouldPauseAtEnd = isAtVideoEnd(targetPos);
+  if (playing && !shouldPauseAtEnd) {
+    movieVideo.play().catch(() => {});
+  } else {
+    movieVideo.pause();
+  }
+}
+
+async function handleSyncCorrection({ positionSec, playing, serverTs, drift, source = 'sync' }) {
+  const targetPos = getCompensatedSyncPosition(positionSec, playing, serverTs);
+  const localPos = clampVideoPosition(movieVideo.currentTime);
+  const signedDrift = targetPos - localPos;
+  const driftSec = Math.abs(Number.isFinite(drift) ? drift : signedDrift);
+  const shouldPauseAtEnd = isAtVideoEnd(targetPos);
+
+  if (source === 'sync' && playing && targetPos < 0.5 && localPos > 5) {
+    console.warn('[Sync] Ignoring suspicious reset-to-zero correction', { targetPos, localPos, driftSec });
+    return;
+  }
+
+  if (!playing) {
+    clearSyncPlaybackRate();
+    if (Math.abs(signedDrift) > 0.15) movieVideo.currentTime = targetPos;
+    if (!movieVideo.paused) movieVideo.pause();
+    return;
+  }
+
+  if (shouldPauseAtEnd) {
+    applyHardSync({ targetPos, playing: false, announce: false, driftSec });
+    return;
+  }
+
+  if (source === 'command') {
+    applyHardSync({ targetPos, playing: true, announce: false, driftSec });
+    return;
+  }
+
+  if (movieVideo.seeking) return;
+
+  if (driftSec >= HARD_SYNC_THRESHOLD_SEC || movieVideo.readyState < HTMLMediaElement.HAVE_FUTURE_DATA) {
+    applyHardSync({ targetPos, playing: true, announce: true, driftSec });
+    return;
+  }
+
+  if (movieVideo.paused) {
+    applyHardSync({ targetPos, playing: true, announce: false, driftSec });
+    return;
+  }
+
+  if (driftSec < SOFT_SYNC_THRESHOLD_SEC) {
+    clearSyncPlaybackRate();
+    return;
+  }
+
+  movieVideo.playbackRate = signedDrift > 0 ? FAST_CATCHUP_RATE : SLOW_CATCHUP_RATE;
+  schedulePlaybackRateReset();
+}
+
 function leaveWatchToLobby({ clearFile = false, keepCall = true, notice = '' } = {}) {
+  clearSyncPlaybackRate();
   movieVideo.pause();
   movieVideo.currentTime = 0;
   if (clearFile) {
@@ -200,6 +304,7 @@ function resetToLanding(message = '') {
 }
 
 function leaveRoomAndGoHome(message = '') {
+  clearSyncPlaybackRate();
   movieVideo.pause();
   movieVideo.currentTime = 0;
   movieVideo.removeAttribute('src');
@@ -394,16 +499,8 @@ function wireClientEvents() {
 
   // A play/pause command relayed from the master peer
   client.on('play_pause', async ({ playing, positionSec, serverTs }) => {
-    // Compensate for round-trip latency
-    const latencyMs = Date.now() - serverTs;
-    const compensatedPos = positionSec + (playing ? latencyMs / 1000 : 0);
-    const targetPos = clampVideoPosition(compensatedPos);
-    const shouldPauseAtEnd = isAtVideoEnd(targetPos);
-
-    movieVideo.currentTime = targetPos;
     try {
-      if (playing && !shouldPauseAtEnd) await movieVideo.play();
-      else         movieVideo.pause();
+      await handleSyncCorrection({ positionSec, playing, serverTs, source: 'command' });
     } catch (e) {
       console.warn('play() blocked by browser autoplay policy:', e.message);
     }
@@ -411,18 +508,16 @@ function wireClientEvents() {
 
   // A seek command from the master peer
   client.on('seek', ({ positionSec }) => {
+    clearSyncPlaybackRate();
     movieVideo.currentTime = clampVideoPosition(positionSec);
   });
 
-  // Server detected drift > 2s — snap back into sync
-  client.on('apply_sync', async ({ positionSec, playing }) => {
-    const targetPos = clampVideoPosition(positionSec);
-    const shouldPauseAtEnd = isAtVideoEnd(targetPos);
-    showToast(`Resyncing… (${Math.abs(movieVideo.currentTime - targetPos).toFixed(1)}s drift)`);
-    movieVideo.currentTime = targetPos;
-    if (playing && movieVideo.paused && !shouldPauseAtEnd)  await movieVideo.play().catch(() => {});
-    if (!playing && !movieVideo.paused) movieVideo.pause();
-    if (shouldPauseAtEnd && !movieVideo.paused) movieVideo.pause();
+  client.on('sync_nudge', async ({ positionSec, playing, serverTs, drift }) => {
+    try {
+      await handleSyncCorrection({ positionSec, playing, serverTs, drift, source: 'sync' });
+    } catch (e) {
+      console.warn('sync correction failed:', e.message);
+    }
   });
 
   // ── Reactions ─────────────────────────────────────────────────────────
@@ -465,6 +560,7 @@ function wireVideoControls() {
   // ── Play / Pause ─────────────────────────────────────────────────────────
   playPauseBtn?.addEventListener('click', () => {
     const nowPlaying = !movieVideo.paused;
+    clearSyncPlaybackRate();
     // Toggle locally first for snappy feel
     if (nowPlaying) movieVideo.pause();
     else            movieVideo.play().catch(() => {});
@@ -486,11 +582,13 @@ function wireVideoControls() {
   seekBar?.addEventListener('mousedown', () => { isSeeking = true; });
 
   seekBar?.addEventListener('input', () => {
+    clearSyncPlaybackRate();
     movieVideo.currentTime = Number(seekBar.value);
   });
 
   seekBar?.addEventListener('mouseup', () => {
     isSeeking = false;
+    clearSyncPlaybackRate();
     client.seek(movieVideo.currentTime);  // broadcast final position
   });
 
@@ -500,9 +598,18 @@ function wireVideoControls() {
   });
 
   movieVideo.addEventListener('ended', () => {
+    clearSyncPlaybackRate();
     const finalPosition = clampVideoPosition(movieVideo.duration || movieVideo.currentTime);
     if (seekBar) seekBar.value = finalPosition;
     client?.playPause(false, finalPosition);
+  });
+
+  movieVideo.addEventListener('waiting', () => {
+    clearSyncPlaybackRate();
+  });
+
+  movieVideo.addEventListener('stalled', () => {
+    clearSyncPlaybackRate();
   });
 
   // ── Sync heartbeat ───────────────────────────────────────────────────────

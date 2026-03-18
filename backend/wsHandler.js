@@ -1,7 +1,7 @@
 const { v4: uuidv4 } = require('uuid');
 
 // ── Tolerance window for sync checks (seconds) ────────────────────────────
-const SYNC_TOLERANCE_SEC = 2;
+const SYNC_TOLERANCE_SEC = 1.25;
 
 // ── Send helper ───────────────────────────────────────────────────────────
 function send(ws, type, payload = {}) {
@@ -180,8 +180,10 @@ function handleConnection(ws, req, roomManager) {
       if (drift > SYNC_TOLERANCE_SEC) {
         send(ws, 'sync_nudge', {
           positionSec: serverPos,
-          drift:       drift.toFixed(2),
+          drift,
           playing:     myRoom.playState.playing,
+          serverTs:    Date.now(),
+          masterId:    myRoom.playState.masterId,
         });
         console.log(`[Sync] ${myRoom.code} nudging peer ${myPeerId.slice(0,8)} drift=${drift.toFixed(2)}s`);
       }
