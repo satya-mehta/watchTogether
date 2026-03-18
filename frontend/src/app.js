@@ -60,6 +60,7 @@ const endCallBtn    = document.getElementById('end-call-btn');
 const muteIcon      = document.getElementById('mute-icon');
 const cameraIcon    = document.getElementById('camera-icon');
 const watchBackBtn  = document.getElementById('watch-back-btn');
+const lobbyBackBtn  = document.getElementById('lobby-back-btn');
 
 const createRoomBtn = document.getElementById('create-room-btn');
 const joinRoomBtn   = document.getElementById('join-room-btn');
@@ -188,10 +189,30 @@ function resetToLanding(message = '') {
   roomCode = null;
   isHost = false;
   peerPresent = false;
+  myFileName = null;
+  client = null;
+  call = null;
+  callStarting = false;
   roomCodeInput.value = '';
   window.history.replaceState({}, '', '/');
   showLandingScreen();
   if (message) showLandingNotice(message);
+}
+
+function leaveRoomAndGoHome(message = '') {
+  movieVideo.pause();
+  movieVideo.currentTime = 0;
+  movieVideo.removeAttribute('src');
+  movieVideo.load();
+  if (fileInput) fileInput.value = '';
+  clearOwnFileSelection();
+  resetReadyState({ disable: true });
+  setSyncStatus('Pick your video file to check for sync', 'idle');
+  call?.end();
+  call = null;
+  showCallUI(false);
+  client?.disconnect();
+  resetToLanding(message);
 }
 
 // ═════════════════════════════════════════════════════════════════════════════
@@ -571,6 +592,10 @@ watchBackBtn?.addEventListener('click', () => {
   });
 });
 
+lobbyBackBtn?.addEventListener('click', () => {
+  leaveRoomAndGoHome();
+});
+
 // ═════════════════════════════════════════════════════════════════════════════
 // 5. REACTIONS
 // ═════════════════════════════════════════════════════════════════════════════
@@ -663,6 +688,10 @@ function addPeerToUI(peer) {
   if (!el) return;
   el.querySelector('.pname').textContent = peer.name;
   el.querySelector('.pav').textContent   = peer.name.slice(0, 2).toUpperCase();
+  const fileLabelEl = document.getElementById('friend-file-label');
+  const friendIconEl = document.querySelector('#friend-card .file-drop .fd-icon');
+  if (fileLabelEl) fileLabelEl.innerHTML = 'Waiting for<br>your friend to choose a file';
+  if (friendIconEl) friendIconEl.textContent = '🎬';
 }
 
 function removePeerFromUI(peerId) {
@@ -670,6 +699,10 @@ function removePeerFromUI(peerId) {
   if (!el) return;
   el.querySelector('.pname').textContent = 'Waiting…';
   el.querySelector('.pav').textContent   = '?';
+  const fileLabelEl = document.getElementById('friend-file-label');
+  const friendIconEl = document.querySelector('#friend-card .file-drop .fd-icon');
+  if (fileLabelEl) fileLabelEl.innerHTML = 'Waiting for<br>your friend to join';
+  if (friendIconEl) friendIconEl.textContent = '🌙';
 }
 
 function updatePeerFileStatus(peerId, durationSec, fileName = null) {

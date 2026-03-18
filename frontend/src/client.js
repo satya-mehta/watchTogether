@@ -25,11 +25,13 @@ class WatchTogetherClient extends EventTarget {
     this.syncTimer   = null;
     this._getPos     = null; // set by caller: () => currentVideoPositionSec
     this._reconnectDelay = 1000;
+    this._shouldReconnect = true;
   }
 
   // ── Connection ────────────────────────────────────────────────────────
   connect() {
     return new Promise((resolve, reject) => {
+      this._shouldReconnect = true;
       this.ws = new WebSocket(this.serverUrl);
 
       this.ws.onopen = () => {
@@ -48,6 +50,12 @@ class WatchTogetherClient extends EventTarget {
       };
 
       this.ws.onclose = () => {
+        if (!this._shouldReconnect) {
+          console.log('[WT] Disconnected');
+          this._emit('disconnected');
+          this._stopSync();
+          return;
+        }
         console.warn('[WT] Disconnected — reconnecting in', this._reconnectDelay, 'ms');
         this._emit('disconnected');
         this._stopSync();
@@ -230,8 +238,12 @@ class WatchTogetherClient extends EventTarget {
   }
 
   disconnect() {
+    this._shouldReconnect = false;
+    this.roomCode = null;
+    this.peerId = null;
     this._stopSync();
     this.ws?.close();
+    this.ws = null;
   }
 }
 

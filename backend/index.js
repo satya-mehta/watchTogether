@@ -8,7 +8,29 @@ const server = http.createServer(app);
 
 // ── WebSocket server ───────────────────────────────────────────────────────
 const wss = new WebSocketServer({ server, path: '/ws' });
-wss.on('connection', (ws, req) => handleConnection(ws, req, roomManager));
+wss.on('connection', (ws, req) => {
+  ws.isAlive = true;
+  ws.on('pong', () => {
+    ws.isAlive = true;
+  });
+  handleConnection(ws, req, roomManager);
+});
+
+const HEARTBEAT_INTERVAL_MS = 5000;
+const heartbeatTimer = setInterval(() => {
+  wss.clients.forEach((ws) => {
+    if (ws.isAlive === false) {
+      ws.terminate();
+      return;
+    }
+    ws.isAlive = false;
+    ws.ping();
+  });
+}, HEARTBEAT_INTERVAL_MS);
+
+wss.on('close', () => {
+  clearInterval(heartbeatTimer);
+});
 
 const PORT = process.env.PORT || 3001;
 const BASE_URL = process.env.RENDER_EXTERNAL_URL || `http://localhost:${PORT}`;
