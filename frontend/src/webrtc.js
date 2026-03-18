@@ -59,6 +59,8 @@ export class VideoCall extends EventTarget {
     this.isInitiator  = false;
     this._started     = false;
     this._pendingCandidates = []; // buffer ICE until remote desc is set
+    this._remotePlayBlocked = false;
+    this._boundRemotePlaybackRetry = () => this._retryRemotePlayback();
 
     // Wire incoming signals from the server relay
     this.client.on('webrtc_signal', (data) => this._onSignal(data.signal));
@@ -140,8 +142,14 @@ export class VideoCall extends EventTarget {
     this.pc?.close();
     this.pc          = null;
     this.localStream = null;
+    this._remotePlayBlocked = false;
     this.localEl.srcObject  = null;
     this.remoteEl.srcObject = null;
+    document.removeEventListener('pointerup', this._boundRemotePlaybackRetry, true);
+    document.removeEventListener('touchend', this._boundRemotePlaybackRetry, true);
+    document.removeEventListener('keydown', this._boundRemotePlaybackRetry, true);
+    document.removeEventListener('visibilitychange', this._boundRemotePlaybackRetry, true);
+    document.removeEventListener('fullscreenchange', this._boundRemotePlaybackRetry, true);
     this._emit('ended');
     console.log('[WebRTC] Call ended');
   }
@@ -176,12 +184,11 @@ export class VideoCall extends EventTarget {
         this.remoteEl.autoplay = true;
         this.remoteEl.playsInline = true;
         this.remoteEl.muted = false;
+        this._bindRemotePlaybackRetry();
         this.remoteEl.onloadedmetadata = () => {
-          this.remoteEl.play?.().catch((err) => {
-            console.warn('[WebRTC] Remote video play() was blocked:', err?.message || err);
-          });
+          this._attemptRemotePlayback('loadedmetadata');
         };
-        this.remoteEl.play?.().catch(() => {});
+        this._attemptRemotePlayback('track');
         this._emit('remote_stream', { stream: this.remoteEl.srcObject });
       };
 
@@ -314,6 +321,32 @@ export class VideoCall extends EventTarget {
 
   _getTrack(kind) {
     return this.localStream?.getTracks().find(t => t.kind === kind) ?? null;
+  }
+
+  _bindRemotePlaybackRetry() {
+    document.addEventListener('pointerup', this._boundRemotePlaybackRetry, true);
+    document.addEventListener('touchend', this._boundRemotePlaybackRetry, true);
+    document.addEventListener('keydown', this._boundRemotePlaybackRetry, true);
+    document.addEventListener('visibilitychange', this._boundRemotePlaybackRetry, true);
+    document.addEventListener('fullscreenchange', this._boundRemotePlaybackRetry, true);
+  }
+
+  async _attemptRemotePlayback(source) {
+    if (!this.remoteEl?.srcObject) return;
+    try {
+      await this.remoteEl.play?.();
+      this._remotePlayBlocked = false;
+    } catch (err) {
+      this._remotePlayBlocked = true;
+      console.warn(`[WebRTC] Remote video play() was blocked during ${source}:`, err?.message || err);
+      this._emit('remote_play_blocked');
+    }
+  }
+
+  _retryRemotePlayback() {
+    if (document.visibilityState === 'hidden') return;
+    if (!this._remotePlayBlocked) return;
+    this._attemptRemotePlayback('gesture-retry');
   }
 
   _emit(type, detail = {}) {

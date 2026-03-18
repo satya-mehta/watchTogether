@@ -762,6 +762,12 @@ async function startVideoCall() {
       console.log('Call started — video:', hasVideo, 'audio:', hasAudio);
       showCallUI(true);
     })
+    .on('remote_stream', () => {
+      showCallUI(true);
+    })
+    .on('remote_play_blocked', () => {
+      showToast('Tap once if your friend’s video does not appear', 'info');
+    })
     .on('connected', () => {
       showToast('Video call connected 📹');
     })
