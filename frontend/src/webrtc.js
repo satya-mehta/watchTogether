@@ -61,11 +61,18 @@ export class VideoCall extends EventTarget {
     this._pendingCandidates = []; // buffer ICE until remote desc is set
     this._remotePlayBlocked = false;
     this._boundRemotePlaybackRetry = () => this._retryRemotePlayback();
+    this._unsubscribeClientEvents = [];
 
     // Wire incoming signals from the server relay
-    this.client.on('webrtc_signal', (data) => this._onSignal(data.signal));
+    this._unsubscribeClientEvents.push(
+      this.client.listen('webrtc_signal', (data) => this._onSignal(data.signal))
+    );
     // When a peer joins the room, the host initiates the call
-    this.client.on('peer_joined',   () => { if (this.isInitiator && this._started) this._createOffer(); });
+    this._unsubscribeClientEvents.push(
+      this.client.listen('peer_joined', () => {
+        if (this.isInitiator && this._started) this._createOffer();
+      }, { replayBuffered: false })
+    );
   }
 
   // ── Public API ──────────────────────────────────────────────────────────
@@ -138,6 +145,10 @@ export class VideoCall extends EventTarget {
 
   /** Hang up and release all resources. */
   end() {
+    this._unsubscribeClientEvents.forEach((unsubscribe) => {
+      try { unsubscribe(); } catch {}
+    });
+    this._unsubscribeClientEvents = [];
     this.localStream?.getTracks().forEach(t => t.stop());
     this.pc?.close();
     this.pc          = null;

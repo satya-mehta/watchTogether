@@ -23,6 +23,8 @@ class WatchTogetherClient extends EventTarget {
     this._getPos     = null; // set by caller: () => currentVideoPositionSec
     this._reconnectDelay = 1000;
     this._shouldReconnect = true;
+    this._listenerCounts = new Map();
+    this._bufferedWebrtcSignals = [];
   }
 
   // ── Connection ────────────────────────────────────────────────────────
@@ -130,9 +132,31 @@ class WatchTogetherClient extends EventTarget {
     this._startSync();
   }
 
+  /** Subscribe to server events and receive an unsubscribe callback. */
+  listen(type, handler, { replayBuffered = true } = {}) {
+    const wrapped = (e) => handler(e.detail);
+    this.addEventListener(type, wrapped);
+    this._listenerCounts.set(type, (this._listenerCounts.get(type) || 0) + 1);
+
+    if (type === 'webrtc_signal' && replayBuffered && this._bufferedWebrtcSignals.length > 0) {
+      const bufferedSignals = [...this._bufferedWebrtcSignals];
+      this._bufferedWebrtcSignals.length = 0;
+      queueMicrotask(() => {
+        bufferedSignals.forEach((detail) => handler(detail));
+      });
+    }
+
+    return () => {
+      this.removeEventListener(type, wrapped);
+      const nextCount = Math.max((this._listenerCounts.get(type) || 1) - 1, 0);
+      if (nextCount === 0) this._listenerCounts.delete(type);
+      else this._listenerCounts.set(type, nextCount);
+    };
+  }
+
   /** Subscribe to server events. Same API as addEventListener. */
   on(type, handler) {
-    this.addEventListener(type, (e) => handler(e.detail));
+    this.listen(type, handler);
     return this; // chainable
   }
 
@@ -201,7 +225,14 @@ class WatchTogetherClient extends EventTarget {
         break;
 
       case 'webrtc_signal':
-        this._emit('webrtc_signal', rest);
+        if ((this._listenerCounts.get('webrtc_signal') || 0) > 0) {
+          this._emit('webrtc_signal', rest);
+        } else {
+          this._bufferedWebrtcSignals.push(rest);
+          if (this._bufferedWebrtcSignals.length > 12) {
+            this._bufferedWebrtcSignals.shift();
+          }
+        }
         break;
 
       case 'return_to_lobby':
@@ -234,6 +265,7 @@ class WatchTogetherClient extends EventTarget {
     this._shouldReconnect = false;
     this.roomCode = null;
     this.peerId = null;
+    this._bufferedWebrtcSignals.length = 0;
     this._stopSync();
     this.ws?.close();
     this.ws = null;
