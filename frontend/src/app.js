@@ -14,10 +14,26 @@ function deriveWsBaseUrl(httpBaseUrl) {
   return httpBaseUrl.replace(/^http:/i, 'ws:').replace(/^https:/i, 'wss:');
 }
 
-const API_BASE_URL = normalizeBaseUrl(APP_CONFIG.apiBaseUrl) || window.location.origin;
-const WS_BASE_URL = normalizeBaseUrl(APP_CONFIG.wsBaseUrl) || deriveWsBaseUrl(API_BASE_URL);
+const BACKEND_BASE_URL =
+  normalizeBaseUrl(APP_CONFIG.backendBaseUrl) ||
+  normalizeBaseUrl(APP_CONFIG.apiBaseUrl) ||
+  window.location.origin;
+const API_BASE_URL = normalizeBaseUrl(APP_CONFIG.apiBaseUrl) || BACKEND_BASE_URL;
+const WS_BASE_URL = normalizeBaseUrl(APP_CONFIG.wsBaseUrl) || deriveWsBaseUrl(BACKEND_BASE_URL);
 const SERVER_ORIGIN = API_BASE_URL;
 const SERVER_URL = `${WS_BASE_URL}/ws`;
+
+async function wakeBackend() {
+  try {
+    await fetch(`${BACKEND_BASE_URL}/health`, {
+      method: 'GET',
+      mode: 'cors',
+      cache: 'no-store',
+    });
+  } catch (err) {
+    console.warn('Backend wake-up ping failed:', err);
+  }
+}
 
 // ── DOM references ─────────────────────────────────────────────────────────
 const movieVideo    = document.getElementById('movie-video');     // <video> for the movie file
@@ -674,3 +690,4 @@ style.textContent = `@keyframes floatUp { from { opacity:1; transform:translateY
 document.head.appendChild(style);
 
 autoJoinFromPath();
+wakeBackend();
