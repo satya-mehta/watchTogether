@@ -74,8 +74,12 @@ body{font-family:'Nunito',sans-serif;background:var(--bg);color:var(--text);min-
 .land-card{background:var(--bg2);border:1px solid var(--border);border-radius:18px;padding:22px;}
 .card-label{font-size:10px;font-weight:700;letter-spacing:2px;color:var(--text3);text-transform:uppercase;margin-bottom:14px;}
 
-.btn-primary{width:100%;padding:15px;background:linear-gradient(135deg,var(--primary),var(--accent));border:none;border-radius:12px;font-family:'Nunito',sans-serif;font-size:15px;font-weight:700;color:#fff;cursor:pointer;box-shadow:0 4px 25px rgba(99,102,241,.4);transition:opacity .2s,transform .12s;}
+.btn-primary{width:100%;padding:15px;background:linear-gradient(135deg,var(--primary),var(--accent));border:none;border-radius:12px;font-family:'Nunito',sans-serif;font-size:15px;font-weight:700;color:#fff;cursor:pointer;box-shadow:0 4px 25px rgba(99,102,241,.4);transition:opacity .2s,transform .12s;display:inline-flex;align-items:center;justify-content:center;gap:10px;}
 .btn-primary:hover{opacity:.9;transform:translateY(-2px);box-shadow:0 6px 30px rgba(99,102,241,.5);}
+.btn-primary:disabled{opacity:.72;cursor:wait;transform:none;box-shadow:0 4px 18px rgba(99,102,241,.25);}
+.btn-primary.is-loading .btn-spinner{display:inline-block;}
+.btn-spinner{display:none;width:14px;height:14px;border-radius:50%;border:2px solid rgba(255,255,255,.28);border-top-color:#fff;animation:spin .8s linear infinite;}
+@keyframes spin{to{transform:rotate(360deg);}}
 .btn-secondary{padding:13px 22px;background:rgba(99,102,241,.12);border:1.5px solid var(--primary);border-radius:12px;font-family:'Nunito',sans-serif;font-size:14px;font-weight:700;color:var(--primary);cursor:pointer;transition:background .2s,border-color .2s;}
 .btn-secondary:hover{background:rgba(99,102,241,.2);border-color:var(--primary);}
 
@@ -357,7 +361,10 @@ input[type=range]#seek-bar::-webkit-slider-thumb{appearance:none;width:14px;heig
     <div class="land-cards">
       <div class="land-card">
         <div class="card-label">Start watching</div>
-        <button class="btn-primary" id="create-room-btn">✦ &nbsp;Create a room</button>
+        <button class="btn-primary" id="create-room-btn">
+          <span class="btn-spinner" aria-hidden="true"></span>
+          <span class="btn-label">✦ Create a room</span>
+        </button>
       </div>
       <div class="land-card">
         <div class="card-label">Got a code?</div>

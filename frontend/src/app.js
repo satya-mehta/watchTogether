@@ -35,6 +35,16 @@ async function wakeBackend() {
   }
 }
 
+function setCreateRoomLoading(isLoading) {
+  if (!createRoomBtn) return;
+  createRoomPending = isLoading;
+  createRoomBtn.disabled = isLoading;
+  createRoomBtn.classList.toggle('is-loading', isLoading);
+  if (createRoomBtnLabel) {
+    createRoomBtnLabel.textContent = isLoading ? 'Creating room...' : '✦ Create a room';
+  }
+}
+
 // ── DOM references ─────────────────────────────────────────────────────────
 const movieVideo    = document.getElementById('movie-video');     // <video> for the movie file
 const localVideo    = document.getElementById('local-video');     // <video muted> PiP self-view
@@ -56,6 +66,7 @@ const joinRoomBtn   = document.getElementById('join-room-btn');
 const roomCodeInput = document.getElementById('room-code-input');
 const readyBtn      = document.getElementById('ready-btn');
 const landingAlert  = document.getElementById('landing-alert');
+const createRoomBtnLabel = createRoomBtn?.querySelector('.btn-label');
 
 const syncToast     = document.getElementById('sync-toast');
 const reactionBtns  = document.querySelectorAll('[data-reaction]');
@@ -69,6 +80,7 @@ let myName   = 'You';
 let myFileName = null;
 let roomCode = null;
 let peerPresent = false;
+let createRoomPending = false;
 
 function resetReadyState({ disable = true } = {}) {
   if (!readyBtn) return;
@@ -172,16 +184,31 @@ function resetToLanding(message = '') {
 // ═════════════════════════════════════════════════════════════════════════════
 
 createRoomBtn?.addEventListener('click', async () => {
+  if (createRoomPending) return;
+  setCreateRoomLoading(true);
   clearLandingNotice();
-  // Ask the server to create a room and get a code back
-  const res  = await fetch(`${SERVER_ORIGIN}/api/rooms`, { method: 'POST' });
-  const data = await res.json();
-  roomCode = data.roomCode;
-  isHost   = true;
-  myName   = prompt('Your name?') || 'You';
+  showLandingNotice('Waking up the server and creating your room...');
+  try {
+    const res = await fetch(`${SERVER_ORIGIN}/api/rooms`, {
+      method: 'POST',
+      mode: 'cors',
+      cache: 'no-store',
+    });
+    if (!res.ok) throw new Error(`Create room failed (${res.status})`);
 
-  showLobby(roomCode);
-  await connectAndJoin();
+    const data = await res.json();
+    roomCode = data.roomCode;
+    isHost   = true;
+    myName   = prompt('Your name?') || 'You';
+
+    showLobby(roomCode);
+    await connectAndJoin();
+  } catch (err) {
+    console.error('Create room failed:', err);
+    showLandingNotice('The server is still waking up. Please wait a moment and try again.');
+  } finally {
+    setCreateRoomLoading(false);
+  }
 });
 
 joinRoomBtn?.addEventListener('click', async () => {
@@ -689,5 +716,5 @@ const style = document.createElement('style');
 style.textContent = `@keyframes floatUp { from { opacity:1; transform:translateY(0) scale(1); } to { opacity:0; transform:translateY(-160px) scale(1.5); } }`;
 document.head.appendChild(style);
 
+void wakeBackend();
 autoJoinFromPath();
-wakeBackend();
