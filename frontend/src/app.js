@@ -88,6 +88,12 @@ let playbackRetryPending = false;
 let videoControlsWired = false;
 let reactionsWired = false;
 let recentAuthoritativeSeek = null;
+let playbackHealthTimer = null;
+let frameCallbackPending = false;
+let lastPlaybackProgressAt = 0;
+let lastRenderedFrameAt = 0;
+let lastFreezeRecoveryAt = 0;
+let freezeRecoveryCount = 0;
 
 const SOFT_SYNC_THRESHOLD_SEC = 0.8;
 const HARD_SYNC_THRESHOLD_SEC = 4;
@@ -97,6 +103,8 @@ const SYNC_RATE_RESET_MS = 2200;
 const FAST_CATCHUP_RATE = 1.04;
 const AUTHORITATIVE_SEEK_WINDOW_MS = 4000;
 const AUTHORITATIVE_SEEK_TOLERANCE_SEC = 1.75;
+const PLAYBACK_FREEZE_THRESHOLD_MS = 2500;
+const PLAYBACK_RECOVERY_COOLDOWN_MS = 1800;
 
 function resetReadyState({ disable = true } = {}) {
   if (!readyBtn) return;
@@ -177,6 +185,24 @@ function getAuthoritativeSeekTarget() {
   return clampVideoPosition(recentAuthoritativeSeek.positionSec + elapsedSec);
 }
 
+function markPlaybackProgress({ rendered = false } = {}) {
+  const now = Date.now();
+  lastPlaybackProgressAt = now;
+  if (rendered) lastRenderedFrameAt = now;
+  freezeRecoveryCount = 0;
+}
+
+function armRenderedFrameWatcher() {
+  if (frameCallbackPending || typeof movieVideo.requestVideoFrameCallback !== 'function') return;
+  if (!movieVideo.src) return;
+  frameCallbackPending = true;
+  movieVideo.requestVideoFrameCallback(() => {
+    frameCallbackPending = false;
+    markPlaybackProgress({ rendered: true });
+    armRenderedFrameWatcher();
+  });
+}
+
 function maybeShowSyncToast(message, driftSec) {
   if (driftSec < SYNC_TOAST_THRESHOLD_SEC) return;
   const now = Date.now();
@@ -190,6 +216,8 @@ async function ensureMoviePlaying({ source = 'sync', showHint = false } = {}) {
     try {
       await movieVideo.play();
       playbackRetryPending = false;
+      markPlaybackProgress();
+      armRenderedFrameWatcher();
       return true;
     } catch (err) {
       playbackRetryPending = true;
@@ -201,6 +229,8 @@ async function ensureMoviePlaying({ source = 'sync', showHint = false } = {}) {
     }
   }
   playbackRetryPending = false;
+  markPlaybackProgress();
+  armRenderedFrameWatcher();
   return true;
 }
 
@@ -227,6 +257,8 @@ function applyExplicitSeek(positionSec, { broadcast = true } = {}) {
   clearSyncPlaybackRate();
   movieVideo.currentTime = targetPos;
   rememberAuthoritativeSeek(targetPos, !movieVideo.paused);
+  markPlaybackProgress();
+  armRenderedFrameWatcher();
   if (broadcast) client?.seek(targetPos);
 }
 
@@ -237,6 +269,8 @@ window.handleExplicitSeekChange = (positionSec) => {
 function applyHardSync({ targetPos, playing, announce = false, driftSec = 0 }) {
   clearSyncPlaybackRate();
   movieVideo.currentTime = targetPos;
+  markPlaybackProgress();
+  armRenderedFrameWatcher();
   if (announce) {
     maybeShowSyncToast(`Resyncing… (${driftSec.toFixed(1)}s drift)`, driftSec);
   }
@@ -405,6 +439,60 @@ function leaveRoomAndGoHome(message = '') {
   showCallUI(false);
   client?.disconnect();
   resetToLanding(message);
+}
+
+function shouldMonitorPlaybackFreeze() {
+  return Boolean(
+    movieVideo.src &&
+    !document.hidden &&
+    !movieVideo.paused &&
+    !movieVideo.seeking &&
+    !movieVideo.ended &&
+    !isAtVideoEnd() &&
+    movieVideo.readyState >= HTMLMediaElement.HAVE_CURRENT_DATA
+  );
+}
+
+async function recoverFrozenPlayback(reason = 'watchdog') {
+  const now = Date.now();
+  if (now - lastFreezeRecoveryAt < PLAYBACK_RECOVERY_COOLDOWN_MS) return;
+  lastFreezeRecoveryAt = now;
+  freezeRecoveryCount += 1;
+
+  const targetPos = clampVideoPosition(movieVideo.currentTime);
+  clearSyncPlaybackRate();
+
+  // Nudge the decoder and then request the authoritative position immediately.
+  try {
+    movieVideo.currentTime = clampVideoPosition(targetPos + 0.001);
+    movieVideo.currentTime = targetPos;
+  } catch {}
+
+  movieVideo.pause();
+  await ensureMoviePlaying({ source: reason, showHint: freezeRecoveryCount > 1 });
+  client?.requestSyncCheck?.(targetPos);
+  markPlaybackProgress();
+  armRenderedFrameWatcher();
+}
+
+function checkPlaybackHealth() {
+  if (!shouldMonitorPlaybackFreeze()) return;
+
+  const activityAt =
+    typeof movieVideo.requestVideoFrameCallback === 'function' && lastRenderedFrameAt > 0
+      ? lastRenderedFrameAt
+      : lastPlaybackProgressAt;
+
+  if (!activityAt) {
+    markPlaybackProgress();
+    armRenderedFrameWatcher();
+    return;
+  }
+
+  if (Date.now() - activityAt < PLAYBACK_FREEZE_THRESHOLD_MS) return;
+  recoverFrozenPlayback('freeze-watchdog').catch((err) => {
+    console.warn('freeze recovery failed:', err?.message || err);
+  });
 }
 
 // ═════════════════════════════════════════════════════════════════════════════
@@ -621,6 +709,7 @@ function wireVideoControls() {
   client.setPositionGetter(() => clampVideoPosition(movieVideo.currentTime));
   if (videoControlsWired) return;
   videoControlsWired = true;
+  playbackHealthTimer = window.setInterval(checkPlaybackHealth, 1000);
 
   // File picker → load into <video> and tell server
   fileInput?.addEventListener('change', (e) => {
@@ -633,6 +722,8 @@ function wireVideoControls() {
     setSyncStatus('Checking your new file against your friend\'s copy…', 'idle');
     movieVideo.src = URL.createObjectURL(file);
     movieVideo.addEventListener('loadedmetadata', () => {
+      markPlaybackProgress();
+      armRenderedFrameWatcher();
       client.fileReady(movieVideo.duration, file.name);
       seekBar && (seekBar.max = movieVideo.duration);
       // Update user's own file icon to checkmark
@@ -702,7 +793,23 @@ function wireVideoControls() {
 
   // Keep seek bar in sync with playback
   movieVideo.addEventListener('timeupdate', () => {
+    markPlaybackProgress();
     if (!isSeeking && seekBar) seekBar.value = movieVideo.currentTime;
+  });
+
+  movieVideo.addEventListener('playing', () => {
+    markPlaybackProgress({ rendered: true });
+    armRenderedFrameWatcher();
+  });
+
+  movieVideo.addEventListener('seeked', () => {
+    markPlaybackProgress({ rendered: true });
+    armRenderedFrameWatcher();
+  });
+
+  movieVideo.addEventListener('loadeddata', () => {
+    markPlaybackProgress({ rendered: true });
+    armRenderedFrameWatcher();
   });
 
   movieVideo.addEventListener('ended', () => {

@@ -107,6 +107,13 @@ class WatchTogetherClient extends EventTarget {
     this._send('seek', { positionSec });
   }
 
+  /** Trigger an immediate sync check instead of waiting for the next interval. */
+  requestSyncCheck(positionSec = this._getPos?.()) {
+    if (typeof positionSec === 'number' && !isNaN(positionSec)) {
+      this._send('sync_check', { positionSec });
+    }
+  }
+
   /** Send an emoji reaction. */
   react(emoji) {
     this._send('reaction', { emoji });
