@@ -84,6 +84,7 @@ export class VideoCall extends EventTarget {
     this.localEl.muted     = true;
     this.localEl.autoplay  = true;
     this.localEl.playsInline = true;
+    this.localEl.play?.().catch(() => {});
 
     this._createPeerConnection();
 
@@ -145,13 +146,35 @@ export class VideoCall extends EventTarget {
     // When we get remote tracks, attach them to the remote video element
     this.pc.ontrack = (event) => {
       console.log('[WebRTC] Got remote track:', event.track.kind);
-      if (!this.remoteEl.srcObject) {
-        this.remoteEl.srcObject = new MediaStream();
-      }
-      this.remoteEl.srcObject.addTrack(event.track);
-      this.remoteEl.autoplay   = true;
-      this.remoteEl.playsInline = true;
-      this._emit('remote_stream', { stream: this.remoteEl.srcObject });
+      const attachRemoteStream = () => {
+        const [remoteStream] = event.streams;
+        if (remoteStream) {
+          this.remoteEl.srcObject = remoteStream;
+        } else {
+          if (!this.remoteEl.srcObject) {
+            this.remoteEl.srcObject = new MediaStream();
+          }
+          if (!this.remoteEl.srcObject.getTracks().some((track) => track.id === event.track.id)) {
+            this.remoteEl.srcObject.addTrack(event.track);
+          }
+        }
+        this.remoteEl.autoplay = true;
+        this.remoteEl.playsInline = true;
+        this.remoteEl.muted = false;
+        this.remoteEl.onloadedmetadata = () => {
+          this.remoteEl.play?.().catch((err) => {
+            console.warn('[WebRTC] Remote video play() was blocked:', err?.message || err);
+          });
+        };
+        this.remoteEl.play?.().catch(() => {});
+        this._emit('remote_stream', { stream: this.remoteEl.srcObject });
+      };
+
+      attachRemoteStream();
+      event.track.onunmute = () => {
+        console.log('[WebRTC] Remote track unmuted:', event.track.kind);
+        attachRemoteStream();
+      };
     };
 
     // Send ICE candidates to peer via server relay

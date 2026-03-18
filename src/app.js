@@ -18,6 +18,8 @@ const seekBar       = document.getElementById('seek-bar');
 const muteBtn       = document.getElementById('mute-btn');
 const cameraBtn     = document.getElementById('camera-btn');
 const endCallBtn    = document.getElementById('end-call-btn');
+const muteIcon      = document.getElementById('mute-icon');
+const cameraIcon    = document.getElementById('camera-icon');
 
 const createRoomBtn = document.getElementById('create-room-btn');
 const joinRoomBtn   = document.getElementById('join-room-btn');
@@ -360,16 +362,20 @@ async function startVideoCall() {
 muteBtn?.addEventListener('click', () => {
   if (!call) return;
   const muted = call.toggleMute();
-  muteBtn.textContent = muted ? '🔇 Unmute' : '🎙 Mute';
   muteBtn.classList.toggle('active', muted);
+  if (muteIcon) muteIcon.textContent = muted ? 'mic_off' : 'mic';
+  muteBtn.title = muted ? 'Unmute microphone' : 'Mute microphone';
+  muteBtn.setAttribute('aria-label', muted ? 'Unmute microphone' : 'Mute microphone');
 });
 
 // ── Camera toggle ────────────────────────────────────────────────────────────
 cameraBtn?.addEventListener('click', () => {
   if (!call) return;
   const hidden = call.toggleCamera();
-  cameraBtn.textContent = hidden ? '📵 Show cam' : '📷 Hide cam';
   cameraBtn.classList.toggle('active', hidden);
+  if (cameraIcon) cameraIcon.textContent = hidden ? 'videocam_off' : 'videocam';
+  cameraBtn.title = hidden ? 'Show camera' : 'Hide camera';
+  cameraBtn.setAttribute('aria-label', hidden ? 'Show camera' : 'Hide camera');
 
   // Show/hide local video element
   localVideo.style.opacity = hidden ? '0' : '1';
@@ -431,7 +437,28 @@ function showLobby(code) {
 
 function showCallUI(visible) {
   document.getElementById('call-controls')?.style.setProperty('display', visible ? 'flex' : 'none');
-  document.getElementById('pip-bubble')?.style.setProperty('display', visible ? 'block' : 'none');
+  const pipBubble = document.getElementById('pip-bubble');
+  pipBubble?.style.setProperty('display', visible ? 'block' : 'none');
+  if (visible) {
+    if (pipBubble) {
+      pipBubble.style.left = '';
+      pipBubble.style.top = '20px';
+      pipBubble.style.right = '20px';
+    }
+    muteBtn?.classList.remove('active');
+    cameraBtn?.classList.remove('active');
+    if (muteBtn) {
+      muteBtn.title = 'Mute microphone';
+      muteBtn.setAttribute('aria-label', 'Mute microphone');
+    }
+    if (cameraBtn) {
+      cameraBtn.title = 'Hide camera';
+      cameraBtn.setAttribute('aria-label', 'Hide camera');
+    }
+    if (muteIcon) muteIcon.textContent = 'mic';
+    if (cameraIcon) cameraIcon.textContent = 'videocam';
+    localVideo.style.opacity = '1';
+  }
 }
 
 function showWatchScreen() {

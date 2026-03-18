@@ -5,7 +5,15 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
 <title>Watch Together</title>
 <link href="https://fonts.googleapis.com/css2?family=Nunito:wght@400;600;700&family=Space+Grotesk:wght@400;500&display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined" rel="stylesheet">
 <style>
+  .material-symbols-outlined {
+  font-variation-settings:
+    'FILL' 1,   /* 1 = filled icons (better look) */
+    'wght' 400,
+    'GRAD' 0,
+    'opsz' 24;
+}
 /* ── Reset & tokens ─────────────────────────────────────────────────────── */
 *{margin:0;padding:0;box-sizing:border-box;}
 :root{
@@ -159,10 +167,26 @@ body{font-family:'Nunito',sans-serif;background:var(--bg);color:var(--text);min-
   position:absolute;top:20px;right:20px;z-index:10;
   width:120px;height:86px;border-radius:14px;
   border:1.5px solid rgba(184,169,217,.3);
+  min-width:120px;min-height:86px;
+  max-width:min(42vw, 360px);max-height:min(36vh, 260px);
   overflow:hidden;cursor:grab;
   box-shadow:0 4px 24px rgba(0,0,0,.5);
   pointer-events:all;
 }
+.pip-resize-handle{
+  position:absolute;
+  width:18px;
+  height:18px;
+  z-index:3;
+  background:transparent;
+  border:none;
+  box-shadow:none;
+  opacity:0;
+}
+.pip-resize-handle.nw{top:0;left:0;cursor:nwse-resize;}
+.pip-resize-handle.ne{top:0;right:0;cursor:nesw-resize;}
+.pip-resize-handle.sw{bottom:0;left:0;cursor:nesw-resize;}
+.pip-resize-handle.se{bottom:0;right:0;cursor:nwse-resize;}
 #remote-video{width:100%;height:100%;object-fit:cover;background:#1c1828;display:block;}
 .pip-live{position:absolute;top:7px;left:7px;display:flex;align-items:center;gap:4px;z-index:2;}
 .pip-live-dot{width:6px;height:6px;border-radius:50%;background:#EC4899;animation:bl 1.5s ease infinite;box-shadow:0 0 6px #EC4899;}
@@ -209,6 +233,7 @@ input[type=range]#seek-bar::-webkit-slider-thumb{appearance:none;width:14px;heig
 /* Call controls strip (mute / camera / end) */
 #call-controls{display:none;position:absolute;bottom:90px;left:50%;transform:translateX(-50%);z-index:20;gap:10px;align-items:center;background:rgba(20,18,28,.85);border:1px solid var(--border);border-radius:30px;padding:8px 16px;}
 .call-btn{background:none;border:none;border-radius:50%;width:36px;height:36px;display:flex;align-items:center;justify-content:center;cursor:pointer;color:var(--text);font-size:15px;transition:background .2s,color .2s;}
+.call-btn .material-symbols-outlined{font-size:20px;line-height:1;}
 .call-btn:hover{background:rgba(99,102,241,.12);color:var(--primary);}
 .call-btn.danger{color:var(--red);}
 .call-btn.active{background:rgba(244,63,94,.15);color:var(--red);}
@@ -444,6 +469,10 @@ input[type=range]#seek-bar::-webkit-slider-thumb{appearance:none;width:14px;heig
 
   <!-- Friend's face (PiP) -->
   <div class="pip-bubble" id="pip-bubble" style="display:none;">
+    <div class="pip-resize-handle nw" data-resize="nw"></div>
+    <div class="pip-resize-handle ne" data-resize="ne"></div>
+    <div class="pip-resize-handle sw" data-resize="sw"></div>
+    <div class="pip-resize-handle se" data-resize="se"></div>
     <div class="pip-live">
       <div class="pip-live-dot"></div>
       <span class="pip-live-txt">Live</span>
@@ -470,12 +499,14 @@ input[type=range]#seek-bar::-webkit-slider-thumb{appearance:none;width:14px;heig
 
   <!-- Call controls (mute / camera / end) -->
   <div id="call-controls">
-    <button class="call-btn" id="mute-btn" title="Mute">
-      <svg width="22" height="22" viewBox="0 0 24 24" fill="currentColor"><path d="M19 11c0 .82-.15 1.61-.41 2.35l1.53 1.53c.57-1.45.88-3.02.88-4.88 0-6.63-5.37-12-12-12-1.86 0-3.43.31-4.88.88l1.53 1.53C5.39 2.15 6.18 2 7 2c5.52 0 10 4.48 10 10zM2.81 2.81L1.39 4.22 10 12.83V13c0 1.66-1.34 3-3 3-1.22 0-2.27-.74-2.74-1.78l-2.1 1.21c.75 1.89 2.62 3.29 4.84 3.29 2.85 0 5.2-2.02 5.67-4.67l6.13 6.13 1.41-1.41L2.81 2.81zM12 4L9.91 6.09C9.95 6.52 10 6.95 10 7.5c0 2.21-1.79 4-4 4-.55 0-.98-.05-1.41-.09L5 11c.54.08 1.06.14 1.59.14 3.31 0 6-2.69 6-6 0-.53-.06-1.05-.14-1.59l1.55 1.55V4h-1z"/></svg>
+    <button class="call-btn" id="mute-btn" title="Mute microphone" aria-label="Mute microphone">
+      <span class="material-symbols-outlined" id="mute-icon">mic</span>
     </button>
-    <button class="call-btn" id="camera-btn" title="Hide camera">📷</button>
-    <button class="call-btn danger" id="end-call-btn" title="End call">
-      <svg width="22" height="22" viewBox="0 0 24 24" fill="currentColor"><path d="M17 10.5V7c0-.55-.45-1-1-1H4c-.55 0-1 .45-1 1v10c0 .55.45 1 1 1h12c.55 0 1-.45 1-1v-3.5l4 4v-11l-4 4z"/></svg>
+    <button class="call-btn" id="camera-btn" title="Hide camera" aria-label="Hide camera">
+      <span class="material-symbols-outlined" id="camera-icon">videocam</span>
+    </button>
+    <button class="call-btn danger" id="end-call-btn" title="End call" aria-label="End call">
+      <span class="material-symbols-outlined">call_end</span>
     </button>
   </div>
 
@@ -570,10 +601,134 @@ input[type=range]#seek-bar::-webkit-slider-thumb{appearance:none;width:14px;heig
 
   // PiP drag
   const pip = document.getElementById('pip-bubble');
+  const pipResizeHandles = Array.from(document.querySelectorAll('[data-resize]'));
   let drag=false,ox=0,oy=0;
-  pip?.addEventListener('mousedown',e=>{drag=true;ox=e.clientX-pip.offsetLeft;oy=e.clientY-pip.offsetTop;pip.style.cursor='grabbing';e.stopPropagation();});
-  document.addEventListener('mousemove',e=>{if(!drag)return;pip.style.left=(e.clientX-ox)+'px';pip.style.top=(e.clientY-oy)+'px';pip.style.right='auto';});
+  let resizeDir = null;
+  let resizeStart = null;
+
+  function clampPipPosition(left, top) {
+    if (!pip) return { left, top };
+    const rect = pip.getBoundingClientRect();
+    const visibleX = rect.width * 0.2;
+    const visibleY = rect.height * 0.2;
+    const minLeft = visibleX - rect.width;
+    const maxLeft = window.innerWidth - visibleX;
+    const minTop = visibleY - rect.height;
+    const maxTop = window.innerHeight - visibleY;
+
+    return {
+      left: Math.min(Math.max(left, minLeft), maxLeft),
+      top: Math.min(Math.max(top, minTop), maxTop)
+    };
+  }
+
+  function getPipSizeBounds() {
+    return {
+      minWidth: 120,
+      minHeight: 86,
+      maxWidth: Math.min(window.innerWidth * 0.42, 360),
+      maxHeight: Math.min(window.innerHeight * 0.36, 260)
+    };
+  }
+
+  function applyPipPosition(left, top) {
+    if (!pip) return;
+    const next = clampPipPosition(left, top);
+    pip.style.left = next.left + 'px';
+    pip.style.top = next.top + 'px';
+    pip.style.right = 'auto';
+  }
+
+  function applyPipSize(width, height, left = pip?.offsetLeft ?? 0, top = pip?.offsetTop ?? 0) {
+    if (!pip) return;
+    const bounds = getPipSizeBounds();
+    const nextWidth = Math.min(Math.max(width, bounds.minWidth), bounds.maxWidth);
+    const nextHeight = Math.min(Math.max(height, bounds.minHeight), bounds.maxHeight);
+    pip.style.width = nextWidth + 'px';
+    pip.style.height = nextHeight + 'px';
+    applyPipPosition(left, top);
+  }
+
+  pip?.addEventListener('mousedown',e=>{
+    if (e.target.closest('[data-resize]')) return;
+    drag=true;
+    const rect = pip.getBoundingClientRect();
+    ox=e.clientX-rect.left;
+    oy=e.clientY-rect.top;
+    pip.style.cursor='grabbing';
+    pip.style.right='auto';
+    e.stopPropagation();
+  });
+  document.addEventListener('mousemove',e=>{
+    if(!drag || !pip) return;
+    applyPipPosition(e.clientX-ox, e.clientY-oy);
+  });
   document.addEventListener('mouseup',()=>{drag=false;if(pip)pip.style.cursor='grab';});
+  pipResizeHandles.forEach((handle) => {
+    handle.addEventListener('mousedown', (e) => {
+      if (!pip) return;
+      const rect = pip.getBoundingClientRect();
+      resizeDir = handle.dataset.resize;
+      resizeStart = {
+        x: e.clientX,
+        y: e.clientY,
+        width: rect.width,
+        height: rect.height,
+        left: rect.left,
+        top: rect.top
+      };
+      drag = false;
+      pip.style.cursor = getComputedStyle(handle).cursor;
+      e.stopPropagation();
+      e.preventDefault();
+    });
+  });
+  document.addEventListener('mousemove', (e) => {
+    if (!resizeDir || !resizeStart || !pip) return;
+    const dx = e.clientX - resizeStart.x;
+    const dy = e.clientY - resizeStart.y;
+    const bounds = getPipSizeBounds();
+    let width = resizeStart.width;
+    let height = resizeStart.height;
+    let left = resizeStart.left;
+    let top = resizeStart.top;
+
+    if (resizeDir.includes('e')) width = resizeStart.width + dx;
+    if (resizeDir.includes('s')) height = resizeStart.height + dy;
+    if (resizeDir.includes('w')) {
+      width = resizeStart.width - dx;
+      left = resizeStart.left + dx;
+    }
+    if (resizeDir.includes('n')) {
+      height = resizeStart.height - dy;
+      top = resizeStart.top + dy;
+    }
+
+    width = Math.min(Math.max(width, bounds.minWidth), bounds.maxWidth);
+    height = Math.min(Math.max(height, bounds.minHeight), bounds.maxHeight);
+    if (resizeDir.includes('w')) left = resizeStart.left + (resizeStart.width - width);
+    if (resizeDir.includes('n')) top = resizeStart.top + (resizeStart.height - height);
+
+    pip.style.width = width + 'px';
+    pip.style.height = height + 'px';
+    applyPipPosition(left, top);
+    e.preventDefault();
+  });
+  document.addEventListener('mouseup',()=>{
+    resizeDir = null;
+    resizeStart = null;
+    if(pip) pip.style.cursor='grab';
+  });
+  window.addEventListener('resize', () => {
+    if (!pip) return;
+    applyPipSize(pip.offsetWidth, pip.offsetHeight, pip.offsetLeft, pip.offsetTop);
+  });
+  if (pip && 'ResizeObserver' in window) {
+    const pipResizeObserver = new ResizeObserver(() => {
+      applyPipPosition(pip.offsetLeft, pip.offsetTop);
+    });
+    pipResizeObserver.observe(pip);
+  }
 
   // Lobby file drop visual
   document.getElementById('file-input')?.addEventListener('change', e => {
