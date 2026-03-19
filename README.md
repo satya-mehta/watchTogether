@@ -189,7 +189,7 @@ Browser A (Vercel)        Render backend              Browser B (Vercel)
 | `countdown_start` | `positionSec` | Countdown before watch screen |
 | `play_pause` | `playing, positionSec, masterId, serverTs` | Relayed playback command |
 | `seek` | `positionSec, masterId, serverTs` | Relayed seek command |
-| `sync_nudge` | `positionSec, drift, playing` | Server-detected drift correction |
+| `sync_nudge` | `positionSec, drift, playing, serverTs, masterId` | Server-detected drift correction. The client SDK also fires this as `apply_sync` so UI code can hook into it without a separate event. |
 | `reaction` | `emoji, fromPeerId` | Relayed emoji reaction |
 | `webrtc_signal` | `signal, fromPeerId` | Relayed WebRTC signal |
 | `return_to_lobby` | `peerId, name` | Peer changed file / returned to lobby |
@@ -283,8 +283,11 @@ The module now tries public STUN servers first and also includes Open Relay STUN
 ## Sync behavior
 
 - Either user can control playback.
-- The server keeps an authoritative `playState` and extrapolates current position while playing.
-- Drift larger than 2 seconds triggers a `sync_nudge`.
+- The server keeps an authoritative `playState` and extrapolates the current position while playing. The extrapolated position is capped at the shortest file duration reported by either peer, so the server clock never runs past the end of the video.
+- The non-master peer sends a `sync_check` heartbeat every **1.5 seconds**. The master peer uses its heartbeat to keep the server clock accurate while playing.
+- Drift larger than **2 seconds** triggers a `sync_nudge` to the non-master peer.
+- After any seek or `sync_nudge`, both the server and the client enter a **1.5-second cooldown** before drift is checked or reported again. This gives the video element time to finish seeking before positions are compared, preventing nudge feedback loops.
+- `play_pause` commands are deduplicated by content (same `playing` state and position within 80 ms) rather than by time alone, which prevents echo storms when the mirrored command arrives back from the other peer.
 - Duration matching is used as a lightweight check that both users picked the same file.
 - If one user leaves, playback is paused for the remaining user.
 - Returning to the lobby resets readiness and playback state.
@@ -313,13 +316,13 @@ The module now tries public STUN servers first and also includes Open Relay STUN
 
 ### Video playback out of sync
 
-**Symptoms:** Videos drift apart or show "Sync nudge" messages frequently.
+**Symptoms:** Videos drift apart, or you see repeated "nudging peer" lines in the backend log for the same position.
 
 **Solutions:**
-- Network latency may be high; this is normal over slow connections.
-- Ensure both files are identical (same resolution, codec, duration).
-- Check the `duration_check` message in the WebSocket protocol; if durations don't match, users picked different files.
-- Disable other bandwidth-heavy tasks on your network.
+- Ensure both files are identical (same resolution, codec, and duration). The `duration_check` message in the protocol will flag a mismatch.
+- Repeated nudges for the same position usually mean one browser is pausing or throttling video decode (e.g. tab in the background, power-saver mode, or hardware decode stall). Bring the tab to the foreground and check CPU usage.
+- Network latency above ~500 ms can cause the 1.5-second post-seek cooldown to expire before the seek has fully landed. If this is a persistent issue on a slow connection, increase `SYNC_SUPPRESS_AFTER_SEEK_MS` in `client.js` and `nudgeCooldownUntil` offset in `wsHandler.js` to `2500`.
+- Disable other bandwidth-heavy tasks on your network during the session.
 
 ### Room persists after refresh
 

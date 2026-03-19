@@ -601,7 +601,7 @@ input[type=range]#seek-bar::-webkit-slider-thumb{appearance:none;width:14px;heig
   </div>
 </div>
 <!-- Shared call UI -->
-<div class="pip-bubble" id="pip-bubble" style="display:none;">
+<div class="pip-bubble" id="pip-bubble" style="display:none;" aria-label="Video call overlay">
   <div class="pip-resize-handle nw" data-resize="nw"></div>
   <div class="pip-resize-handle ne" data-resize="ne"></div>
   <div class="pip-resize-handle sw" data-resize="sw"></div>
@@ -827,6 +827,42 @@ input[type=range]#seek-bar::-webkit-slider-thumb{appearance:none;width:14px;heig
     });
     pipResizeObserver.observe(pip);
   }
+
+  // ── Video call pip visibility ─────────────────────────────────────────
+  // app.js (module) exposes the VideoCall instance as window.activeCall.
+  // We listen to 'show_pip' (fired once camera is ready) to reveal the
+  // pip-bubble and call-controls, and 'ended' to hide them again.
+  // This runs after DOMContentLoaded so window.activeCall may not exist yet
+  // — we poll briefly to pick it up once app.js has initialised.
+  (function wireCallUI() {
+    const pipEl       = document.getElementById('pip-bubble');
+    const ctrlEl      = document.getElementById('call-controls');
+
+    function attachCallListeners(call) {
+      call.addEventListener('show_pip', () => {
+        if (pipEl)  pipEl.style.display  = 'block';
+        if (ctrlEl) ctrlEl.style.display = 'flex';
+      });
+      call.addEventListener('ended', () => {
+        if (pipEl)  pipEl.style.display  = 'none';
+        if (ctrlEl) ctrlEl.style.display = 'none';
+      });
+    }
+
+    // app.js is a module and runs after this inline script.
+    // Poll every 200ms for up to 5s until window.activeCall is set.
+    let attempts = 0;
+    const poll = setInterval(() => {
+      attempts++;
+      if (window.activeCall) {
+        clearInterval(poll);
+        attachCallListeners(window.activeCall);
+      } else if (attempts > 25) {
+        clearInterval(poll);
+        console.warn('[UI] window.activeCall never set — pip visibility not wired');
+      }
+    }, 200);
+  })();
 
   // Lobby file drop visual
   document.getElementById('file-input')?.addEventListener('change', e => {
