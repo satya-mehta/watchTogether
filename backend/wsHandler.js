@@ -175,11 +175,16 @@ function handleConnection(ws, req, roomManager) {
     // against server-authoritative position and nudges if drifted.
     // Client sends: { type:'sync_check', positionSec }
     if (type === 'sync_check') {
-        if (typeof msg.positionSec !== 'number') {
-          console.warn('[Sync] Invalid positionSec:', msg.positionSec);
-          return;
-        }
-        
+      if (typeof msg.positionSec !== 'number') {
+        console.warn('[Sync] Invalid positionSec:', msg.positionSec);
+        return;
+      }
+      
+      // Let the current master refresh the authoritative clock using its
+      // actual playback position instead of a blind server-side timer.
+      if (myPeerId === myRoom.playState.masterId) {
+        myRoom.playState.positionSec = msg.positionSec;
+        myRoom.playState.lastUpdatedAt = Date.now();
         return;
       }
 
