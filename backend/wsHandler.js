@@ -2,6 +2,8 @@ const { v4: uuidv4 } = require('uuid');
 
 // ── Tolerance window for sync checks (seconds) ────────────────────────────
 const SYNC_TOLERANCE_SEC = 2;
+// ── Deduplication window for play_pause commands (ms) ────────────────────
+const PLAY_PAUSE_DEDUP_MS = 300;
 
 // ── Send helper ───────────────────────────────────────────────────────────
 function send(ws, type, payload = {}) {
@@ -43,6 +45,7 @@ function roomSnapshot(room, forPeerId) {
 function handleConnection(ws, req, roomManager) {
   let myRoom   = null;
   let myPeerId = null;
+  let lastPlayPauseAt = 0; // track last play_pause to deduplicate
 
   // ── Incoming messages ───────────────────────────────────────────────────
   ws.on('message', (raw) => {
@@ -122,10 +125,17 @@ function handleConnection(ws, req, roomManager) {
       // If all peers ready → countdown start signal
       const allPeers = [...myRoom.peers.values()];
       if (allPeers.length === 2 && allPeers.every(p => p.isReady)) {
-        // Sync position to 0 and tell everyone to count down
-        myRoom.playState = { playing: false, positionSec: 0, lastUpdatedAt: Date.now(), masterId: myRoom.playState.masterId };
+        // Sync position to 0 and reset for fresh start
+        // Pick one of the ready peers as initial master
+        const initialMasterId = allPeers[0].peerId;
+        myRoom.playState = { 
+          playing: false, 
+          positionSec: 0, 
+          lastUpdatedAt: Date.now(), 
+          masterId: initialMasterId 
+        };
         broadcast(myRoom, 'countdown_start', { positionSec: 0 });
-        console.log(`[Sync] ${myRoom.code} both ready → countdown`);
+        console.log(`[Sync] ${myRoom.code} both ready → countdown (master: ${initialMasterId.slice(0,8)})`);
       }
       return;
     }
@@ -134,6 +144,14 @@ function handleConnection(ws, req, roomManager) {
     // The device that pressed play/pause becomes master for this action.
     // Client sends: { type:'play_pause', playing, positionSec, timestamp }
     if (type === 'play_pause') {
+      // Deduplicate: ignore if same command received within PLAY_PAUSE_DEDUP_MS
+      const now = Date.now();
+      if (now - lastPlayPauseAt < PLAY_PAUSE_DEDUP_MS) {
+        console.log(`[Sync] ${myRoom.code} ignoring duplicate play_pause from ${myPeerId.slice(0,8)}`);
+        return;
+      }
+      lastPlayPauseAt = now;
+
       const ps = myRoom.playState;
       ps.playing       = !!msg.playing;
       ps.positionSec   = msg.positionSec ?? roomManager.currentPosition(myRoom);
@@ -199,7 +217,9 @@ function handleConnection(ws, req, roomManager) {
           serverTs:    Date.now(),
           masterId:    myRoom.playState.masterId,
         });
-        console.log(`[Sync] ${myRoom.code} nudging peer ${myPeerId.slice(0,8)} drift=${drift.toFixed(2)}s`);
+        // Log detailed info for large drifts
+        const driftWarn = drift > 100 ? ' [LARGE DRIFT!]' : '';
+        console.log(`[Sync] ${myRoom.code} nudging peer ${myPeerId.slice(0,8)} drift=${drift.toFixed(2)}s (peer_pos=${msg.positionSec.toFixed(1)}s, server_pos=${serverPos.toFixed(1)}s)${driftWarn}`);
       }
       return;
     }
