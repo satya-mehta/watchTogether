@@ -4,36 +4,6 @@ Real-time watch party app for syncing local video playback between two people, w
 
 The project is split into a static frontend and a separate Node/WebSocket backend so you can deploy the UI to Vercel and the server to Render.
 
-## Quick start
-
-Backend:
-
-```bash
-cd backend
-npm install
-npm run dev
-# or
-npm start
-```
-
-Frontend:
-
-- Open `frontend/index.html` locally with a static server, or deploy `frontend/` to Vercel.
-- Point `frontend/config.js` at your deployed backend URL when frontend and backend are on different domains.
-
-- Backend URL: `http://localhost:3001`
-- WebSocket endpoint: `ws://localhost:3001/ws`
-- Health check: `http://localhost:3001/health`
-
-## How it works
-
-1. Create a room and share the generated room code or room link.
-2. Both people join the same room.
-3. Each person picks the same local video file.
-4. The server compares file durations to catch mismatches.
-5. Once both people mark ready, the app starts a countdown.
-6. Play, pause, seek, react, and video chat in sync.
-
 ## Screenshots
 
 ![Homepage](frontend/assets/screenshots/ss01.png)
@@ -55,6 +25,142 @@ Frontend:
 <p align="center">Player Screenshot</p>
 
 ---
+
+## Quick start
+
+Backend:
+
+```bash
+cd backend
+npm install
+npm run dev
+# or
+npm start
+```
+
+Frontend:
+
+- Open `frontend/index.html` locally with a static server, or deploy `frontend/` to Vercel.
+- Point `frontend/config.js` at your deployed backend URL when frontend and backend are on different domains.
+
+- Backend URL: `http://localhost:3001`
+- WebSocket endpoint: `ws://localhost:3001/ws`
+- Health check: `http://localhost:3001/health`
+
+## Prerequisites
+
+- **Node.js**: 14.0.0 or higher
+- **npm**: 6.0.0 or higher
+- **Modern browser**: Chrome, Firefox, Safari, or Edge (WebRTC support required)
+- For WebRTC video call: microphone and camera access (browser will prompt)
+
+## Configuration
+
+### Backend
+
+Create a `.env` file in the `backend/` directory (optional; all values have defaults):
+
+```bash
+PORT=3001
+RENDER_EXTERNAL_URL=http://localhost:3001
+CORS_ORIGIN=http://localhost:3000,http://localhost:5173
+```
+
+Then restart the backend to apply changes.
+
+### Frontend
+
+Edit `frontend/config.js` to point to your deployed backend:
+
+**Local development:**
+```js
+window.WATCH_TOGETHER_CONFIG = {
+  backendBaseUrl: 'http://localhost:3001',
+};
+```
+
+**Production (Render):**
+```js
+window.WATCH_TOGETHER_CONFIG = {
+  backendBaseUrl: 'https://your-render-app-name.onrender.com',
+};
+```
+
+The frontend will automatically convert the HTTP URL to WebSocket (`ws://` or `wss://`).
+
+## Environment Variables
+
+### Backend
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `PORT` | `3001` | Server port |
+| `RENDER_EXTERNAL_URL` | `http://localhost:PORT` | External URL for the backend (set by Render automatically) |
+| `CORS_ORIGIN` | `` (empty) | Comma-separated origins allowed to access the API; empty allows all origins |
+
+**Example:**
+```bash
+PORT=3001
+CORS_ORIGIN=https://watch-party-frontend.vercel.app,http://localhost:3000
+```
+
+## Deployment
+
+### Backend → Render
+
+1. Create a [Render](https://render.com) account and sign in.
+2. Click **New +** and select **Web Service**.
+3. Connect your GitHub repository.
+4. Fill in the service details:
+   - **Name**: `watchtogether-backend`
+   - **Runtime**: `Node`
+   - **Build Command**: `npm install`
+   - **Start Command**: `npm start`
+   - **Environment**: Select `backend/` as the root directory (Render Premium feature) or use Subdirectory option
+5. In the **Environment** tab, add:
+   - `CORS_ORIGIN`: Your Vercel frontend URL (e.g., `https://watch-party.vercel.app`)
+6. Click **Create Web Service**.
+7. Copy the URL (e.g., `https://watchtogether-ei80.onrender.com`) and update `frontend/config.js`.
+
+**Note:** Render free tier spins down after 15 minutes of inactivity; upgrade to Render Pro for always-on service.
+
+### Frontend → Vercel
+
+1. Create a [Vercel](https://vercel.com) account or sign in.
+2. Click **Add New** → **Project**.
+3. Import your GitHub repository.
+4. Set **Root Directory** to `frontend/`.
+5. Click **Deploy**.
+6. Your frontend is live at `https://your-project-name.vercel.app`.
+
+Vercel automatically handles the `vercel.json` rewrite rules to support room URLs like `/COOL-1234`.
+
+### Local Development
+
+For local testing with both frontend and backend on the same machine:
+
+```bash
+# Terminal 1 - Backend
+cd backend
+npm install
+npm run dev
+
+# Terminal 2 - Frontend (if using a static server)
+cd frontend
+npx http-server -p 3000
+# or use your favorite static server
+```
+
+Then open `http://localhost:3000` in your browser and point the config to `http://localhost:3001`.
+
+## How it works
+
+1. Create a room and share the generated room code or room link.
+2. Both people join the same room.
+3. Each person picks the same local video file.
+4. The server compares file durations to catch mismatches.
+5. Once both people mark ready, the app starts a countdown.
+6. Play, pause, seek, react, and video chat in sync.
 
 ## Architecture
 
@@ -246,6 +352,56 @@ The module now tries public STUN servers first and also includes Open Relay STUN
 - Duration matching is used as a lightweight check that both users picked the same file.
 - If one user leaves, playback is paused for the remaining user.
 - Returning to the lobby resets readiness and playback state.
+
+## Troubleshooting
+
+### WebSocket connection fails
+
+**Symptoms:** "Connection refused" or "Failed to connect" errors in the browser console.
+
+**Solutions:**
+- Verify the backend is running: Check `http://localhost:3001/health` (or your deployed URL).
+- Check `frontend/config.js` points to the correct backend URL.
+- Ensure `CORS_ORIGIN` in backend environment includes your frontend URL.
+- Verify firewall/network allows WebSocket connections on the backend port.
+
+### Video call doesn't start
+
+**Symptoms:** P2P video not appearing or camera unavailable error.
+
+**Solutions:**
+- Grant browser permission for camera and microphone when prompted.
+- Ensure both browsers support WebRTC (check console for errors like `getUserMedia failed`).
+- Check NAT/firewall rules; some corporate networks block WebRTC. Try enabling TURN in `frontend/src/webrtc.js` or deploy your own TURN server.
+- Verify `webrtc.js` module is loaded: Check browser DevTools Network tab.
+
+### Video playback out of sync
+
+**Symptoms:** Videos drift apart or show "Sync nudge" messages frequently.
+
+**Solutions:**
+- Network latency may be high; this is normal over slow connections.
+- Ensure both files are identical (same resolution, codec, duration).
+- Check the `duration_check` message in the WebSocket protocol; if durations don't match, users picked different files.
+- Disable other bandwidth-heavy tasks on your network.
+
+### Room persists after refresh
+
+**Note:** This is expected behavior. Rooms are stored in memory and persist even after all users leave. If a user opens a room link later, they will see the old room state. To reset, restart the backend.
+
+### Localhost connection shows "ws://localhost:3001" but still fails
+
+**Solution:** Ensure the backend is running on the same machine. Port 3001 must be available and not blocked by another service. Use `netstat -ano | findstr :3001` (Windows) or `lsof -i :3001` (Mac/Linux) to check.
+
+### Deployed frontend can't reach deployed backend
+
+**Symptoms:** CORS errors or connection timeouts in production.
+
+**Solutions:**
+- Verify `frontend/config.js` uses the correct backend URL (must be the full Render URL, not localhost).
+- Check backend `CORS_ORIGIN` environment variable includes the frontend domain.
+- Verify both Render and Vercel deployments are active and running.
+- Enable Render Pro to prevent backend from spinning down.
 
 ## Notes
 
