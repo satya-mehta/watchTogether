@@ -4,6 +4,17 @@ const { app } = require('./app');
 const { handleConnection } = require('./wsHandler');
 const { roomManager } = require('./roomManager');
 
+// ── Global error handlers to prevent process crash ─────────────────────
+process.on('uncaughtException', (err) => {
+  console.error('[FATAL] Uncaught Exception:', err);
+  // Log but don't crash - let the process continue
+});
+
+process.on('unhandledRejection', (reason, promise) => {
+  console.error('[FATAL] Unhandled Rejection at:', promise, 'reason:', reason);
+  // Log but don't crash - let the process continue
+});
+
 const server = http.createServer(app);
 
 // ── WebSocket server ───────────────────────────────────────────────────────

@@ -11,15 +11,19 @@
 
 // How often to send a sync heartbeat (ms)
 const SYNC_INTERVAL_MS = 2500;
+// How often to ping /health to keep Render backend awake (ms) — 10 minutes
+const KEEPALIVE_INTERVAL_MS = 600000;
 
 class WatchTogetherClient extends EventTarget {
-  constructor(serverUrl) {
+  constructor(serverUrl, backendBaseUrl = null) {
     super();
     this.serverUrl   = serverUrl;
+    this.backendBaseUrl = backendBaseUrl; // for health check keep-alive
     this.ws          = null;
     this.peerId      = null;
     this.roomCode    = null;
     this.syncTimer   = null;
+    this.keepaliveTimer = null; // keep backend awake on Render
     this._getPos     = null; // set by caller: () => currentVideoPositionSec
     this._reconnectDelay = 1000;
     this._shouldReconnect = true;
@@ -36,6 +40,7 @@ class WatchTogetherClient extends EventTarget {
       this.ws.onopen = () => {
         console.log('[WT] Connected');
         this._reconnectDelay = 1000;
+        this._startKeepalive(); // Start keep-alive when connected
         resolve();
       };
 
@@ -53,11 +58,13 @@ class WatchTogetherClient extends EventTarget {
           console.log('[WT] Disconnected');
           this._emit('disconnected');
           this._stopSync();
+          this._stopKeepalive(); // Stop keep-alive when disconnected
           return;
         }
         console.warn('[WT] Disconnected — reconnecting in', this._reconnectDelay, 'ms');
         this._emit('disconnected');
         this._stopSync();
+        this._stopKeepalive(); // Stop keep-alive when disconnected
         setTimeout(() => this._reconnect(), this._reconnectDelay);
         this._reconnectDelay = Math.min(this._reconnectDelay * 2, 16000);
       };
@@ -268,12 +275,56 @@ class WatchTogetherClient extends EventTarget {
     if (this.syncTimer) { clearInterval(this.syncTimer); this.syncTimer = null; }
   }
 
+  /**
+   * Start periodic health checks to keep Render backend from hibernating.
+   * Render free tier stops services after 15 min of inactivity.
+   */
+  _startKeepalive() {
+    this._stopKeepalive();
+    if (!this.backendBaseUrl) return; // No backend URL provided, skip keep-alive
+    
+    this.keepaliveTimer = setInterval(() => {
+      this._pingHealth();
+    }, KEEPALIVE_INTERVAL_MS);
+    
+    // Ping immediately on first connection
+    this._pingHealth();
+  }
+
+  _stopKeepalive() {
+    if (this.keepaliveTimer) {
+      clearInterval(this.keepaliveTimer);
+      this.keepaliveTimer = null;
+    }
+  }
+
+  /**
+   * Ping the /health endpoint to keep backend awake.
+   */
+  async _pingHealth() {
+    if (!this.backendBaseUrl) return;
+    try {
+      const response = await fetch(`${this.backendBaseUrl}/health`, {
+        method: 'GET',
+        mode: 'cors',
+        cache: 'no-store',
+      });
+      if (response.ok) {
+        const data = await response.json();
+        console.log('[WT] Keep-alive ping — backend healthy:', data.status, `(${data.rooms} rooms, ${data.peers} peers)`);
+      }
+    } catch (err) {
+      console.warn('[WT] Keep-alive ping failed:', err.message);
+    }
+  }
+
   disconnect() {
     this._shouldReconnect = false;
     this.roomCode = null;
     this.peerId = null;
     this._bufferedWebrtcSignals.length = 0;
     this._stopSync();
+    this._stopKeepalive();
     this.ws?.close();
     this.ws = null;
   }

@@ -904,7 +904,7 @@ joinRoomBtn?.addEventListener('click', async () => {
 });
 
 async function connectAndJoin() {
-  client = new WatchTogetherClient(SERVER_URL);
+  client = new WatchTogetherClient(SERVER_URL, BACKEND_BASE_URL);
   await client.connect();
   client.join({ roomCode, name: myName, isHost });
 

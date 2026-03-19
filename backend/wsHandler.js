@@ -46,11 +46,12 @@ function handleConnection(ws, req, roomManager) {
 
   // ── Incoming messages ───────────────────────────────────────────────────
   ws.on('message', (raw) => {
-    let msg;
-    try { msg = JSON.parse(raw); }
-    catch { return send(ws, 'error', { message: 'Invalid JSON' }); }
+    try {
+      let msg;
+      try { msg = JSON.parse(raw); }
+      catch { return send(ws, 'error', { message: 'Invalid JSON' }); }
 
-    const { type } = msg;
+      const { type } = msg;
 
     // ── JOIN ──────────────────────────────────────────────────────────────
     // Client sends: { type:'join', roomCode, name, isHost }
@@ -174,11 +175,11 @@ function handleConnection(ws, req, roomManager) {
     // against server-authoritative position and nudges if drifted.
     // Client sends: { type:'sync_check', positionSec }
     if (type === 'sync_check') {
-      // Let the current master refresh the authoritative clock using its
-      // actual playback position instead of a blind server-side timer.
-      if (myPeerId === myRoom.playState.masterId) {
-        myRoom.playState.positionSec = msg.positionSec;
-        myRoom.playState.lastUpdatedAt = Date.now();
+        if (typeof msg.positionSec !== 'number') {
+          console.warn('[Sync] Invalid positionSec:', msg.positionSec);
+          return;
+        }
+        
         return;
       }
 
@@ -233,30 +234,38 @@ function handleConnection(ws, req, roomManager) {
     }
 
     send(ws, 'error', { message: `Unknown message type: ${type}` });
+    } catch (err) {
+      console.error('[WS] Error processing message:', err.message);
+      try { send(ws, 'error', { message: 'Server error processing message' }); } catch {}
+    }
   });
 
   // ── Disconnect ────────────────────────────────────────────────────────
   ws.on('close', () => {
-    if (!myRoom || !myPeerId) return;
-    const peer = myRoom.peers.get(myPeerId);
-    roomManager.removePeer(myRoom, myPeerId);
+    try {
+      if (!myRoom || !myPeerId) return;
+      const peer = myRoom.peers.get(myPeerId);
+      roomManager.removePeer(myRoom, myPeerId);
 
-    // Notify remaining peer
-    broadcast(myRoom, 'peer_left', {
-      peerId: myPeerId,
-      name:   peer?.name,
-    });
+      // Notify remaining peer
+      broadcast(myRoom, 'peer_left', {
+        peerId: myPeerId,
+        name:   peer?.name,
+      });
 
-    // Pause playback for remaining peer since sync partner is gone
-    if (myRoom.peers.size > 0) {
-      const serverPos = roomManager.currentPosition(myRoom);
-      myRoom.playState.playing = false;
-      myRoom.playState.positionSec = serverPos;
-      broadcast(myRoom, 'play_pause', { playing: false, positionSec: serverPos, reason: 'peer_left' });
+      // Pause playback for remaining peer since sync partner is gone
+      if (myRoom.peers.size > 0) {
+        const serverPos = roomManager.currentPosition(myRoom);
+        myRoom.playState.playing = false;
+        myRoom.playState.positionSec = serverPos;
+        broadcast(myRoom, 'play_pause', { playing: false, positionSec: serverPos, reason: 'peer_left' });
+      }
+    } catch (err) {
+      console.error('[WS] Error during close handler:', err.message);
     }
   });
 
-  ws.on('error', (err) => console.error('[WS] Error:', err.message));
+  ws.on('error', (err) => console.error('[WS] Socket error:', err.message));
 }
 
 module.exports = { handleConnection };
