@@ -10,25 +10,37 @@
  */
 
 // How often to send a sync heartbeat (ms)
-const SYNC_INTERVAL_MS = 2500;
+// BUG FIX: was 2500ms. At 2.5s intervals, drift can grow to ~2s between
+// checks on a slow device before we even detect it. 1500ms gives tighter
+// correction without hammering the server.
+const SYNC_INTERVAL_MS = 1500;
+
 // How often to ping /health to keep Render backend awake (ms) — 10 minutes
 const KEEPALIVE_INTERVAL_MS = 600000;
+
+// BUG FIX: after a seek or sync_nudge, suppress outgoing sync_checks for
+// this long so the local video element has time to seek before we start
+// reporting our position again. Avoids the phantom-drift feedback loop.
+const SYNC_SUPPRESS_AFTER_SEEK_MS = 1500;
 
 class WatchTogetherClient extends EventTarget {
   constructor(serverUrl, backendBaseUrl = null) {
     super();
-    this.serverUrl   = serverUrl;
-    this.backendBaseUrl = backendBaseUrl; // for health check keep-alive
-    this.ws          = null;
-    this.peerId      = null;
-    this.roomCode    = null;
-    this.syncTimer   = null;
-    this.keepaliveTimer = null; // keep backend awake on Render
-    this._getPos     = null; // set by caller: () => currentVideoPositionSec
-    this._reconnectDelay = 1000;
-    this._shouldReconnect = true;
-    this._listenerCounts = new Map();
+    this.serverUrl      = serverUrl;
+    this.backendBaseUrl = backendBaseUrl;
+    this.ws             = null;
+    this.peerId         = null;
+    this.roomCode       = null;
+    this.syncTimer      = null;
+    this.keepaliveTimer = null;
+    this._getPos        = null;
+    this._reconnectDelay      = 1000;
+    this._shouldReconnect     = true;
+    this._listenerCounts      = new Map();
     this._bufferedWebrtcSignals = [];
+
+    // BUG FIX: track when to suppress sync_check sends (after seek/nudge)
+    this._syncSuppressUntil = 0;
   }
 
   // ── Connection ────────────────────────────────────────────────────────
@@ -40,7 +52,7 @@ class WatchTogetherClient extends EventTarget {
       this.ws.onopen = () => {
         console.log('[WT] Connected');
         this._reconnectDelay = 1000;
-        this._startKeepalive(); // Start keep-alive when connected
+        this._startKeepalive();
         resolve();
       };
 
@@ -58,13 +70,13 @@ class WatchTogetherClient extends EventTarget {
           console.log('[WT] Disconnected');
           this._emit('disconnected');
           this._stopSync();
-          this._stopKeepalive(); // Stop keep-alive when disconnected
+          this._stopKeepalive();
           return;
         }
         console.warn('[WT] Disconnected — reconnecting in', this._reconnectDelay, 'ms');
         this._emit('disconnected');
         this._stopSync();
-        this._stopKeepalive(); // Stop keep-alive when disconnected
+        this._stopKeepalive();
         setTimeout(() => this._reconnect(), this._reconnectDelay);
         this._reconnectDelay = Math.min(this._reconnectDelay * 2, 16000);
       };
@@ -76,14 +88,14 @@ class WatchTogetherClient extends EventTarget {
   async _reconnect() {
     try {
       await this.connect();
-      // Re-join the same room after reconnect
-      if (this.roomCode) this._send('join', { roomCode: this.roomCode, name: this._myName, isHost: this._isHost });
+      if (this.roomCode) {
+        this._send('join', { roomCode: this.roomCode, name: this._myName, isHost: this._isHost });
+      }
     } catch { /* will retry via onclose */ }
   }
 
   // ── Public API ────────────────────────────────────────────────────────
 
-  /** Join a room. Call after connect(). */
   join({ roomCode, name, isHost = false }) {
     this.roomCode = roomCode;
     this._myName  = name;
@@ -91,62 +103,48 @@ class WatchTogetherClient extends EventTarget {
     this._send('join', { roomCode, name, isHost });
   }
 
-  /** Tell the server your file is loaded and its duration in seconds. */
   fileReady(durationSec, fileName = null) {
     this._send('file_ready', { durationSec, fileName });
   }
 
-  /** Toggle your ready state in the lobby. */
   setReady(isReady) {
     this._send('ready_toggle', { isReady });
   }
 
-  /**
-   * Send a play or pause command.
-   * You become master. The server relays this to the other peer.
-   */
   playPause(playing, positionSec) {
     this._send('play_pause', { playing, positionSec, timestamp: Date.now() });
   }
 
-  /** Seek to a position. */
   seek(positionSec) {
+    // BUG FIX: suppress our own sync_checks right after we send a seek, so
+    // we don't report a stale position before the local video has seeked.
+    this._syncSuppressUntil = Date.now() + SYNC_SUPPRESS_AFTER_SEEK_MS;
     this._send('seek', { positionSec });
   }
 
-  /** Trigger an immediate sync check instead of waiting for the next interval. */
   requestSyncCheck(positionSec = this._getPos?.()) {
     if (typeof positionSec === 'number' && !isNaN(positionSec)) {
       this._send('sync_check', { positionSec });
     }
   }
 
-  /** Send an emoji reaction. */
   react(emoji) {
     this._send('reaction', { emoji });
   }
 
-  /** Pass a WebRTC signal (SDP or ICE candidate) to the peer. */
   sendSignal(signal) {
     this._send('webrtc_signal', { signal });
   }
 
-  /** Ask the other peer to return to the lobby. */
   returnToLobby() {
     this._send('return_to_lobby');
   }
 
-  /**
-   * Register the function that returns the current video position.
-   * Used for periodic sync checks.
-   * e.g.: client.setPositionGetter(() => videoEl.currentTime)
-   */
   setPositionGetter(fn) {
     this._getPos = fn;
     this._startSync();
   }
 
-  /** Subscribe to server events and receive an unsubscribe callback. */
   listen(type, handler, { replayBuffered = true } = {}) {
     const wrapped = (e) => handler(e.detail);
     this.addEventListener(type, wrapped);
@@ -168,10 +166,9 @@ class WatchTogetherClient extends EventTarget {
     };
   }
 
-  /** Subscribe to server events. Same API as addEventListener. */
   on(type, handler) {
     this.listen(type, handler);
-    return this; // chainable
+    return this;
   }
 
   // ── Internal ──────────────────────────────────────────────────────────
@@ -220,18 +217,28 @@ class WatchTogetherClient extends EventTarget {
         this._emit('countdown_start', rest);
         break;
 
-      // ── Sync commands from the other peer (relayed by server) ─────────
       case 'play_pause':
         this._emit('play_pause', rest);
         break;
 
       case 'seek':
+        // BUG FIX: when we receive a seek from the other peer, suppress our
+        // own sync_checks for a moment so we don't immediately report our
+        // pre-seek position and trigger a phantom nudge back.
+        this._syncSuppressUntil = Date.now() + SYNC_SUPPRESS_AFTER_SEEK_MS;
         this._emit('seek', rest);
         break;
 
-      // ── Server tells us we've drifted ─────────────────────────────────
       case 'sync_nudge':
+        // BUG FIX: suppress sync_checks after applying a nudge for the same
+        // reason — give the video element time to actually seek before we
+        // report our position again.
+        this._syncSuppressUntil = Date.now() + SYNC_SUPPRESS_AFTER_SEEK_MS;
+        // Emit as both 'sync_nudge' (for any low-level listeners) AND
+        // 'apply_sync' which is what app.js should hook into for actually
+        // applying the correction to the video element.
         this._emit('sync_nudge', rest);
+        this._emit('apply_sync', rest);
         break;
 
       case 'reaction':
@@ -264,6 +271,10 @@ class WatchTogetherClient extends EventTarget {
     this._stopSync();
     this.syncTimer = setInterval(() => {
       if (!this._getPos) return;
+
+      // BUG FIX: don't send position reports while in suppress window
+      if (Date.now() < this._syncSuppressUntil) return;
+
       const pos = this._getPos();
       if (typeof pos === 'number' && !isNaN(pos)) {
         this._send('sync_check', { positionSec: pos });
@@ -275,19 +286,14 @@ class WatchTogetherClient extends EventTarget {
     if (this.syncTimer) { clearInterval(this.syncTimer); this.syncTimer = null; }
   }
 
-  /**
-   * Start periodic health checks to keep Render backend from hibernating.
-   * Render free tier stops services after 15 min of inactivity.
-   */
   _startKeepalive() {
     this._stopKeepalive();
-    if (!this.backendBaseUrl) return; // No backend URL provided, skip keep-alive
-    
+    if (!this.backendBaseUrl) return;
+
     this.keepaliveTimer = setInterval(() => {
       this._pingHealth();
     }, KEEPALIVE_INTERVAL_MS);
-    
-    // Ping immediately on first connection
+
     this._pingHealth();
   }
 
@@ -298,9 +304,6 @@ class WatchTogetherClient extends EventTarget {
     }
   }
 
-  /**
-   * Ping the /health endpoint to keep backend awake.
-   */
   async _pingHealth() {
     if (!this.backendBaseUrl) return;
     try {
@@ -311,7 +314,8 @@ class WatchTogetherClient extends EventTarget {
       });
       if (response.ok) {
         const data = await response.json();
-        console.log('[WT] Keep-alive ping — backend healthy:', data.status, `(${data.rooms} rooms, ${data.peers} peers)`);
+        console.log('[WT] Keep-alive ping — backend healthy:', data.status,
+          `(${data.rooms} rooms, ${data.peers} peers)`);
       }
     } catch (err) {
       console.warn('[WT] Keep-alive ping failed:', err.message);
@@ -321,7 +325,7 @@ class WatchTogetherClient extends EventTarget {
   disconnect() {
     this._shouldReconnect = false;
     this.roomCode = null;
-    this.peerId = null;
+    this.peerId   = null;
     this._bufferedWebrtcSignals.length = 0;
     this._stopSync();
     this._stopKeepalive();
@@ -331,6 +335,3 @@ class WatchTogetherClient extends EventTarget {
 }
 
 export { WatchTogetherClient };
-
-// Export for both ESM and CJS
-if (typeof module !== 'undefined') module.exports = { WatchTogetherClient };

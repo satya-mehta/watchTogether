@@ -25,8 +25,8 @@ function generateCode() {
 
 class RoomManager {
   constructor() {
-    this.rooms = new Map(); // roomId → room
-    this.codeIndex = new Map(); // code → roomId
+    this.rooms = new Map();     // roomId → room
+    this.codeIndex = new Map(); // code   → roomId
 
     // Clean up empty rooms every 10 minutes
     setInterval(() => this._gc(), 10 * 60 * 1000);
@@ -74,7 +74,6 @@ class RoomManager {
       fileDuration: null,
       isReady: false,
     });
-    // First peer becomes master
     if (room.peers.size === 1) room.playState.masterId = peerId;
     console.log(`[Room] ${room.code}  +peer ${name} (${peerId})  total=${room.peers.size}`);
   }
@@ -84,12 +83,10 @@ class RoomManager {
     room.peers.delete(peerId);
     console.log(`[Room] ${room.code}  -peer ${peer?.name}  remaining=${room.peers.size}`);
 
-    // Hand master to the other peer if master left
     if (room.playState.masterId === peerId && room.peers.size > 0) {
       room.playState.masterId = [...room.peers.keys()][0];
     }
 
-    // Destroy room when empty
     if (room.peers.size === 0) {
       this.rooms.delete(room.id);
       this.codeIndex.delete(room.code);
@@ -97,12 +94,32 @@ class RoomManager {
     }
   }
 
-  // ── Current position (accounts for elapsed time since last update) ───────
+  // ── Current position ─────────────────────────────────────────────────────
+  // BUG FIX: old version had no upper bound. If the video was playing and
+  // no sync_check from the master had updated positionSec recently (e.g.
+  // after a reconnect or tab switch), currentPosition() could extrapolate
+  // way past the actual end of the file. The non-master would receive a
+  // sync_nudge pointing past EOF → browser clamps to duration → infinite
+  // drift loop.
+  //
+  // Fix: cap at the shortest known file duration in the room so the server
+  // clock never runs past the end of the video.
   currentPosition(room) {
     const ps = room.playState;
     if (!ps.playing) return ps.positionSec;
+
     const elapsed = (Date.now() - ps.lastUpdatedAt) / 1000;
-    return ps.positionSec + elapsed;
+    const raw = ps.positionSec + elapsed;
+
+    // Determine shortest file duration known in room as an upper cap
+    let maxPos = Infinity;
+    room.peers.forEach(p => {
+      if (typeof p.fileDuration === 'number' && p.fileDuration > 0) {
+        maxPos = Math.min(maxPos, p.fileDuration);
+      }
+    });
+
+    return maxPos === Infinity ? raw : Math.min(raw, maxPos);
   }
 
   // ── Stats ────────────────────────────────────────────────────────────────
@@ -123,7 +140,7 @@ class RoomManager {
   _gc() {
     const now = Date.now();
     this.rooms.forEach((room, id) => {
-      const age = (now - room.createdAt) / 1000 / 60; // minutes
+      const age = (now - room.createdAt) / 1000 / 60;
       if (room.peers.size === 0 && age > 30) {
         this.rooms.delete(id);
         this.codeIndex.delete(room.code);
