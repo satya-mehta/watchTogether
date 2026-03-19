@@ -67,6 +67,7 @@ export class VideoCall extends EventTarget {
     this._videoSender = null;     // track RTCRtpSender for video to replace when toggling camera
     this._audioSender = null;     // track RTCRtpSender for audio to replace when toggling mute
     this._cameraSwitching = false; // prevent overlapping camera switch requests
+    this._cameraEnabled = true;   // track logical camera state independently from track existence
 
     // Wire incoming signals from the server relay
     this._unsubscribeClientEvents.push(
@@ -136,18 +137,19 @@ export class VideoCall extends EventTarget {
 
   /** Turn camera on / off. Releases camera resource when off, reacquires when on. Returns new hidden state. */
   toggleCamera() {
-    const track = this._getTrack('video');
-    if (!track) return true;
+    // Toggle the logical camera state
+    this._cameraEnabled = !this._cameraEnabled;
+    const hidden = !this._cameraEnabled;
 
-    const isCurrentlyOn = track.enabled;
-    if (isCurrentlyOn) {
-      // Turn OFF: release camera resource
-      this._releaseCamera();
-    } else {
+    if (this._cameraEnabled) {
       // Turn ON: reacquire camera resource
       this._resumeCamera();
+    } else {
+      // Turn OFF: release camera resource
+      this._releaseCamera();
     }
-    return !isCurrentlyOn; // return new hidden state
+
+    return hidden; // return new hidden state
   }
 
   /**
@@ -253,6 +255,7 @@ export class VideoCall extends EventTarget {
     this._videoSender = null;
     this._audioSender = null;
     this._cameraSwitching = false;
+    this._cameraEnabled = true;
     this._remotePlayBlocked = false;
     this.localEl.srcObject  = null;
     this.remoteEl.srcObject = null;
