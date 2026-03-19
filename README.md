@@ -56,18 +56,6 @@ Frontend:
 
 ## Configuration
 
-### Backend
-
-Create a `.env` file in the `backend/` directory (optional; all values have defaults):
-
-```bash
-PORT=3001
-RENDER_EXTERNAL_URL=http://localhost:3001
-CORS_ORIGIN=http://localhost:3000,http://localhost:5173
-```
-
-Then restart the backend to apply changes.
-
 ### Frontend
 
 Edit `frontend/config.js` to point to your deployed backend:
