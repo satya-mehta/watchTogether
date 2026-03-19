@@ -6,25 +6,12 @@ The project is split into a static frontend and a separate Node/WebSocket backen
 
 ## Screenshots
 
-![Homepage](frontend/assets/screenshots/ss01.png)
-<p align="center">Dashboard Screenshot</p>
-
----
-
-![Guide](frontend/assets/screenshots/ss02.png)
-<p align="center">New User Guide Screenshot</p>
-
----
-
-![Lobby](frontend/assets/screenshots/ss03.png)
-<p align="center">Lobby Screenshot</p>
-
----
-
-![Player](frontend/assets/screenshots/ss04.png)
-<p align="center">Player Screenshot</p>
-
----
+| | |
+|---|---|
+| ![Homepage](frontend/assets/screenshots/ss01.png) | ![Guide](frontend/assets/screenshots/ss02.png) |
+| Dashboard | New User Guide |
+| ![Lobby](frontend/assets/screenshots/ss03.png) | ![Player](frontend/assets/screenshots/ss04.png) |
+| Lobby | Player |
 
 ## Quick start
 
@@ -76,52 +63,13 @@ window.WATCH_TOGETHER_CONFIG = {
 
 The frontend will automatically convert the HTTP URL to WebSocket (`ws://` or `wss://`).
 
-## Environment Variables
-
-### Backend
-
-| Variable | Default | Description |
-|----------|---------|-------------|
-| `PORT` | `3001` | Server port |
-| `RENDER_EXTERNAL_URL` | `http://localhost:PORT` | External URL for the backend (set by Render automatically) |
-| `CORS_ORIGIN` | `` (empty) | Comma-separated origins allowed to access the API; empty allows all origins |
-
-**Example:**
-```bash
-PORT=3001
-CORS_ORIGIN=https://watch-party-frontend.vercel.app,http://localhost:3000
-```
-
 ## Deployment
 
-### Backend → Render
+### Live App
 
-1. Create a [Render](https://render.com) account and sign in.
-2. Click **New +** and select **Web Service**.
-3. Connect your GitHub repository.
-4. Fill in the service details:
-   - **Name**: `watchtogether-backend`
-   - **Runtime**: `Node`
-   - **Build Command**: `npm install`
-   - **Start Command**: `npm start`
-   - **Environment**: Select `backend/` as the root directory (Render Premium feature) or use Subdirectory option
-5. In the **Environment** tab, add:
-   - `CORS_ORIGIN`: Your Vercel frontend URL (e.g., `https://watch-party.vercel.app`)
-6. Click **Create Web Service**.
-7. Copy the URL (e.g., `https://watchtogether-ei80.onrender.com`) and update `frontend/config.js`.
-
-**Note:** Render free tier spins down after 15 minutes of inactivity; upgrade to Render Pro for always-on service.
-
-### Frontend → Vercel
-
-1. Create a [Vercel](https://vercel.com) account or sign in.
-2. Click **Add New** → **Project**.
-3. Import your GitHub repository.
-4. Set **Root Directory** to `frontend/`.
-5. Click **Deploy**.
-6. Your frontend is live at `https://your-project-name.vercel.app`.
-
-Vercel automatically handles the `vercel.json` rewrite rules to support room URLs like `/COOL-1234`.
+The app is deployed and running live:
+- **Frontend**: https://watchtogetherlive.netlify.com
+- **Backend**: Deployed on Render (configured in frontend/config.js)
 
 ### Local Development
 
