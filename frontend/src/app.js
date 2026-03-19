@@ -51,8 +51,18 @@ const localVideo    = document.getElementById('local-video');     // <video mute
 const remoteVideo   = document.getElementById('remote-video');    // <video> friend's face
 
 const fileInput     = document.getElementById('file-input');
+const subtitleInput = document.getElementById('subtitle-input');
+const subtitlePicker = document.getElementById('subtitle-picker');
+const subtitleFileLabel = document.getElementById('subtitle-file-label');
+const subtitleClearBtn = document.getElementById('subtitle-clear-btn');
 const playPauseBtn  = document.getElementById('play-pause-btn');
 const seekBar       = document.getElementById('seek-bar');
+const captionsSelect = document.getElementById('captions-select');
+const audioTrackSelect = document.getElementById('audio-track-select');
+const captionsHelp  = document.getElementById('captions-help');
+const audioTrackHelp = document.getElementById('audio-track-help');
+const captionsField = captionsSelect?.closest('.track-field');
+const audioTrackField = audioTrackSelect?.closest('.track-field');
 
 const muteBtn       = document.getElementById('mute-btn');
 const cameraBtn     = document.getElementById('camera-btn');
@@ -95,6 +105,11 @@ let lastRenderedFrameAt = 0;
 let lastFreezeRecoveryAt = 0;
 let freezeRecoveryCount = 0;
 let lastSentPlayPauseCommand = null;
+let trackRefreshFrame = null;
+let trackRefreshTimeout = null;
+let localSubtitleTrackEl = null;
+let localSubtitleObjectUrl = null;
+let localSubtitleFileName = null;
 
 const SOFT_SYNC_THRESHOLD_SEC = 0.8;
 const HARD_SYNC_THRESHOLD_SEC = 4;
@@ -126,6 +141,112 @@ function clearOwnFileSelection() {
   if (yourIconEl) yourIconEl.textContent = '🎬';
 }
 
+function setTrackHelpText(element, message, tone = 'info') {
+  if (!element) return;
+  element.textContent = message;
+  element.dataset.tone = tone;
+}
+
+function setTrackFieldVisibility(field, isVisible) {
+  if (field) field.style.display = isVisible ? '' : 'none';
+}
+
+function resetSubtitlePickerState({ clearInput = true } = {}) {
+  subtitlePicker?.classList.remove('loaded');
+  if (subtitleFileLabel) subtitleFileLabel.textContent = 'Add your own local .srt or .vtt file';
+  if (subtitleClearBtn) subtitleClearBtn.disabled = true;
+  if (clearInput && subtitleInput) subtitleInput.value = '';
+}
+
+function setSubtitlePickerState(message, { loaded = false } = {}) {
+  subtitlePicker?.classList.toggle('loaded', loaded);
+  if (subtitleFileLabel) subtitleFileLabel.textContent = message;
+  if (subtitleClearBtn) subtitleClearBtn.disabled = !loaded;
+  if (subtitleInput) subtitleInput.value = '';
+}
+
+function revokeLocalSubtitleUrl() {
+  if (!localSubtitleObjectUrl) return;
+  URL.revokeObjectURL(localSubtitleObjectUrl);
+  localSubtitleObjectUrl = null;
+}
+
+function detachLocalSubtitleTrack({ clearInput = true } = {}) {
+  if (localSubtitleTrackEl?.track) localSubtitleTrackEl.track.mode = 'disabled';
+  localSubtitleTrackEl?.remove();
+  localSubtitleTrackEl = null;
+  revokeLocalSubtitleUrl();
+  localSubtitleFileName = null;
+  resetSubtitlePickerState({ clearInput });
+  queueTrackControlRefresh();
+}
+
+function convertSrtToVtt(srtText) {
+  const normalized = String(srtText || '')
+    .replace(/^\uFEFF/, '')
+    .replace(/\r+/g, '');
+  const convertedTimestamps = normalized.replace(/(\d{1,2}:\d{2}:\d{2}),(\d{3})/g, '$1.$2');
+  return `WEBVTT\n\n${convertedTimestamps.trim()}\n`;
+}
+
+async function attachLocalSubtitleFile(file) {
+  if (!file) {
+    detachLocalSubtitleTrack();
+    return;
+  }
+
+  const extension = file.name.split('.').pop()?.toLowerCase();
+  if (!['srt', 'vtt'].includes(extension || '')) {
+    throw new Error('Only .srt and .vtt subtitles are supported right now.');
+  }
+
+  setSubtitlePickerState(`Preparing ${truncateFileName(file.name, 28)}…`);
+  let subtitleText = await file.text();
+  if (!subtitleText.trim()) {
+    throw new Error('That subtitle file is empty.');
+  }
+  if (extension === 'srt') subtitleText = convertSrtToVtt(subtitleText);
+
+  if (localSubtitleTrackEl?.track) localSubtitleTrackEl.track.mode = 'disabled';
+  localSubtitleTrackEl?.remove();
+  revokeLocalSubtitleUrl();
+
+  const trackUrl = URL.createObjectURL(new Blob([subtitleText], { type: 'text/vtt' }));
+  const trackEl = document.createElement('track');
+  trackEl.kind = 'subtitles';
+  trackEl.label = file.name.replace(/\.[^.]+$/, '');
+  trackEl.srclang = 'und';
+  trackEl.src = trackUrl;
+  trackEl.default = true;
+  movieVideo.appendChild(trackEl);
+
+  localSubtitleTrackEl = trackEl;
+  localSubtitleObjectUrl = trackUrl;
+  localSubtitleFileName = file.name;
+  setSubtitlePickerState(`${truncateFileName(file.name, 30)} ready only for you`, { loaded: true });
+  setTrackHelpText(
+    captionsHelp,
+    movieVideo.src
+      ? 'Local subtitle file loaded. It stays only on your device.'
+      : 'Local subtitle file is ready. Load your movie to use it.',
+    'ok'
+  );
+  queueTrackControlRefresh();
+
+  window.setTimeout(() => {
+    const tracks = getSelectableTextTracks();
+    const selectedTrack =
+      tracks.find((track) => track.label === trackEl.label) ||
+      tracks[tracks.length - 1];
+    if (!selectedTrack) return;
+    tracks.forEach((track) => {
+      track.mode = 'disabled';
+    });
+    selectedTrack.mode = 'showing';
+    refreshCaptionOptions();
+  }, 0);
+}
+
 function setSyncStatus(message, tone = 'idle') {
   const syncLabel = document.getElementById('sync-label');
   const syncDot = document.getElementById('sync-dot');
@@ -146,6 +267,213 @@ function clampVideoPosition(positionSec) {
 function isAtVideoEnd(positionSec = movieVideo.currentTime) {
   const durationSec = getVideoDurationSec();
   return durationSec != null && durationSec > 0 && positionSec >= durationSec - 0.25;
+}
+
+function getTrackEntries(trackList) {
+  if (!trackList || typeof trackList.length !== 'number') return [];
+  return Array.from({ length: trackList.length }, (_, index) => trackList[index]).filter(Boolean);
+}
+
+function getLanguageLabel(languageCode) {
+  const code = String(languageCode || '').trim();
+  if (!code || code.toLowerCase() === 'und') return '';
+  const normalized = code.replace('_', '-');
+  const baseCode = normalized.split('-')[0];
+
+  try {
+    if (typeof Intl?.DisplayNames === 'function') {
+      const displayNames = new Intl.DisplayNames([navigator.language || 'en'], { type: 'language' });
+      return displayNames.of(baseCode) || normalized.toUpperCase();
+    }
+  } catch {}
+
+  return normalized.toUpperCase();
+}
+
+function getTrackLabel(track, index, fallbackPrefix) {
+  const parts = [];
+  const pushPart = (value) => {
+    const text = String(value || '').trim();
+    if (!text) return;
+    if (parts.some((part) => part.toLowerCase() === text.toLowerCase())) return;
+    parts.push(text);
+  };
+
+  pushPart(track?.label);
+  pushPart(getLanguageLabel(track?.language));
+
+  const kind = String(track?.kind || '').trim().toLowerCase();
+  if (kind && !['main', 'subtitles', 'captions'].includes(kind)) {
+    pushPart(kind);
+  }
+
+  if (!parts.length) pushPart(`${fallbackPrefix} ${index + 1}`);
+  return parts.join(' · ');
+}
+
+function setSelectOptions(selectEl, options, { value = '', disabled = false } = {}) {
+  if (!selectEl) return;
+
+  selectEl.innerHTML = '';
+  options.forEach((option) => {
+    const el = document.createElement('option');
+    el.value = String(option.value);
+    el.textContent = option.label;
+    selectEl.appendChild(el);
+  });
+
+  const optionValues = options.map((option) => String(option.value));
+  selectEl.value = optionValues.includes(String(value)) ? String(value) : String(options[0]?.value ?? '');
+  selectEl.disabled = disabled;
+}
+
+function resetTrackControls() {
+  setSelectOptions(captionsSelect, [{ value: 'init', label: 'Load a movie first' }], { value: 'init', disabled: true });
+  setSelectOptions(audioTrackSelect, [{ value: 'init', label: 'Load a movie first' }], { value: 'init', disabled: true });
+  setTrackHelpText(captionsHelp, 'Load a movie, or add your own .srt/.vtt in the lobby.', 'info');
+  setTrackHelpText(audioTrackHelp, 'Audio choice stays local to you. Browser support varies for embedded tracks.', 'info');
+  setTrackFieldVisibility(captionsField, false);
+  setTrackFieldVisibility(audioTrackField, false);
+}
+
+function setTrackControlsLoading() {
+  setSelectOptions(captionsSelect, [{ value: 'loading', label: 'Reading caption tracks…' }], { value: 'loading', disabled: true });
+  setSelectOptions(audioTrackSelect, [{ value: 'loading', label: 'Reading audio tracks…' }], { value: 'loading', disabled: true });
+  setTrackHelpText(captionsHelp, 'Checking the movie and any local caption file you attached…', 'info');
+  setTrackHelpText(audioTrackHelp, 'Checking what audio tracks the browser exposes for this movie…', 'info');
+}
+
+function getSelectableTextTracks() {
+  return getTrackEntries(movieVideo.textTracks).filter((track) => !['metadata', 'chapters'].includes(track.kind));
+}
+
+function getSelectableAudioTracks() {
+  return getTrackEntries(movieVideo.audioTracks);
+}
+
+function refreshCaptionOptions() {
+  if (!movieVideo.src) {
+    setSelectOptions(
+      captionsSelect,
+      [{ value: localSubtitleFileName ? 'pending' : 'init', label: localSubtitleFileName ? 'Caption file ready' : 'Load a movie first' }],
+      { value: localSubtitleFileName ? 'pending' : 'init', disabled: true }
+    );
+    setTrackHelpText(
+      captionsHelp,
+      localSubtitleFileName
+        ? 'Local subtitle file is ready. Load your movie to use it.'
+        : 'Load a movie, or add your own .srt/.vtt in the lobby.',
+      localSubtitleFileName ? 'ok' : 'info'
+    );
+    setTrackFieldVisibility(captionsField, !!localSubtitleFileName);
+    return;
+  }
+
+  const tracks = getSelectableTextTracks();
+  if (!tracks.length) {
+    setSelectOptions(captionsSelect, [{ value: 'none', label: 'No captions available' }], { value: 'none', disabled: true });
+    setTrackHelpText(
+      captionsHelp,
+      localSubtitleFileName
+        ? 'Your local subtitle file is attached, but the browser has not exposed it yet. Re-add it as .vtt if needed.'
+        : 'No embedded captions found. Add a local .srt/.vtt file in the lobby.',
+      localSubtitleFileName ? 'warn' : 'info'
+    );
+    setTrackFieldVisibility(captionsField, !!localSubtitleFileName);
+    return;
+  }
+
+  const selectedIndex = tracks.findIndex((track) => track.mode === 'showing');
+  const options = [
+    { value: 'off', label: 'Off' },
+    ...tracks.map((track, index) => ({
+      value: String(index),
+      label: getTrackLabel(track, index, 'Caption'),
+    })),
+  ];
+
+  setSelectOptions(captionsSelect, options, {
+    value: selectedIndex >= 0 ? String(selectedIndex) : 'off',
+    disabled: false,
+  });
+  setTrackHelpText(
+    captionsHelp,
+    localSubtitleFileName
+      ? `Using local subtitles: ${truncateFileName(localSubtitleFileName, 28)}`
+      : 'Embedded captions found. You can still add your own .srt/.vtt in the lobby.',
+    localSubtitleFileName ? 'ok' : 'info'
+  );
+  setTrackFieldVisibility(captionsField, true);
+}
+
+function refreshAudioTrackOptions() {
+  if (!movieVideo.src) {
+    setSelectOptions(audioTrackSelect, [{ value: 'init', label: 'Load a movie first' }], { value: 'init', disabled: true });
+    setTrackHelpText(audioTrackHelp, 'Audio choice stays local to you. Browser support varies for embedded tracks.', 'info');
+    setTrackFieldVisibility(audioTrackField, false);
+    return;
+  }
+
+  if (!movieVideo.audioTracks) {
+    setSelectOptions(
+      audioTrackSelect,
+      [{ value: 'unsupported', label: 'Default audio only here' }],
+      { value: 'unsupported', disabled: true }
+    );
+    setTrackHelpText(
+      audioTrackHelp,
+      'This browser can play the movie, but it cannot switch embedded audio tracks for this local file.',
+      'warn'
+    );
+    setTrackFieldVisibility(audioTrackField, false);
+    return;
+  }
+
+  const tracks = getSelectableAudioTracks();
+  if (!tracks.length) {
+    setSelectOptions(audioTrackSelect, [{ value: 'none', label: 'No switchable tracks found' }], { value: 'none', disabled: true });
+    setTrackHelpText(audioTrackHelp, 'Only the default audio is available in this browser for this file.', 'warn');
+    setTrackFieldVisibility(audioTrackField, false);
+    return;
+  }
+
+  const selectedIndex = Math.max(tracks.findIndex((track) => track.enabled), 0);
+  const options = tracks.map((track, index) => ({
+    value: String(index),
+    label: getTrackLabel(track, index, 'Audio'),
+  }));
+
+  setSelectOptions(audioTrackSelect, options, {
+    value: String(selectedIndex),
+    disabled: tracks.length < 2,
+  });
+  setTrackHelpText(
+    audioTrackHelp,
+    tracks.length < 2
+      ? 'Only one exposed audio track was found. Audio choice stays local to you.'
+      : 'Pick any available audio track. This choice stays local to you.',
+    tracks.length < 2 ? 'info' : 'ok'
+  );
+  setTrackFieldVisibility(audioTrackField, true);
+}
+
+function refreshMediaTrackControls() {
+  refreshCaptionOptions();
+  refreshAudioTrackOptions();
+}
+
+function queueTrackControlRefresh() {
+  if (trackRefreshFrame) cancelAnimationFrame(trackRefreshFrame);
+  clearTimeout(trackRefreshTimeout);
+
+  trackRefreshFrame = requestAnimationFrame(() => {
+    trackRefreshFrame = null;
+    refreshMediaTrackControls();
+    trackRefreshTimeout = window.setTimeout(() => {
+      refreshMediaTrackControls();
+      trackRefreshTimeout = null;
+    }, 250);
+  });
 }
 
 function clearSyncPlaybackRate() {
@@ -383,6 +711,8 @@ function leaveWatchToLobby({ clearFile = false, keepCall = true, notice = '' } =
     myFileName = null;
     if (fileInput) fileInput.value = '';
     clearOwnFileSelection();
+    detachLocalSubtitleTrack();
+    resetTrackControls();
   }
   if (!keepCall) {
     call?.end();
@@ -459,6 +789,8 @@ function leaveRoomAndGoHome(message = '') {
   movieVideo.load();
   if (fileInput) fileInput.value = '';
   clearOwnFileSelection();
+  detachLocalSubtitleTrack();
+  resetTrackControls();
   resetReadyState({ disable: true });
   setSyncStatus('Pick your video file to check for sync', 'idle');
   call?.end();
@@ -739,20 +1071,25 @@ function wireVideoControls() {
   if (videoControlsWired) return;
   videoControlsWired = true;
   playbackHealthTimer = window.setInterval(checkPlaybackHealth, 1000);
+  resetSubtitlePickerState({ clearInput: false });
+  resetTrackControls();
 
   // File picker → load into <video> and tell server
   fileInput?.addEventListener('change', (e) => {
     const file = e.target.files[0];
     if (!file) return;
     const isNewSelection = myFileName && myFileName !== file.name;
+    if (isNewSelection) detachLocalSubtitleTrack();
     myFileName = file.name;
     resetReadyState({ disable: true });
     client?.setReady(false);
     setSyncStatus('Checking your new file against your friend\'s copy…', 'idle');
+    setTrackControlsLoading();
     movieVideo.src = URL.createObjectURL(file);
     movieVideo.addEventListener('loadedmetadata', () => {
       markPlaybackProgress();
       armRenderedFrameWatcher();
+      queueTrackControlRefresh();
       client.fileReady(movieVideo.duration, file.name);
       seekBar && (seekBar.max = movieVideo.duration);
       // Update user's own file icon to checkmark
@@ -765,6 +1102,25 @@ function wireVideoControls() {
         showToast('New file selected. Waiting for your friend to re-check sync.');
       }
     }, { once: true });
+  });
+
+  subtitleInput?.addEventListener('change', async (e) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    try {
+      await attachLocalSubtitleFile(file);
+      showToast('Local captions added just for you', 'success');
+    } catch (err) {
+      console.warn('subtitle load failed:', err?.message || err);
+      detachLocalSubtitleTrack();
+      showToast(err?.message || 'Could not read that subtitle file', 'warn');
+    }
+  });
+
+  subtitleClearBtn?.addEventListener('click', () => {
+    if (!localSubtitleFileName) return;
+    detachLocalSubtitleTrack();
+    showToast('Local captions removed', 'info');
   });
 
   // ── Play / Pause ─────────────────────────────────────────────────────────
@@ -780,10 +1136,35 @@ function wireVideoControls() {
 
   // Keyboard shortcut: space bar
   document.addEventListener('keydown', (e) => {
-    if (e.code === 'Space' && document.activeElement.tagName !== 'INPUT') {
+    const activeTag = document.activeElement?.tagName;
+    if (e.code === 'Space' && !['INPUT', 'SELECT', 'TEXTAREA', 'BUTTON'].includes(activeTag)) {
       e.preventDefault();
       playPauseBtn?.click();
     }
+  });
+
+  captionsSelect?.addEventListener('change', () => {
+    const selectedValue = captionsSelect.value;
+    const tracks = getSelectableTextTracks();
+    tracks.forEach((track) => {
+      track.mode = 'disabled';
+    });
+
+    if (selectedValue !== 'off') {
+      const selectedTrack = tracks[Number(selectedValue)];
+      if (selectedTrack) selectedTrack.mode = 'showing';
+    }
+
+    refreshCaptionOptions();
+  });
+
+  audioTrackSelect?.addEventListener('change', () => {
+    const tracks = getSelectableAudioTracks();
+    const selectedIndex = Number(audioTrackSelect.value);
+    tracks.forEach((track, index) => {
+      track.enabled = index === selectedIndex;
+    });
+    refreshAudioTrackOptions();
   });
 
   // ── Seek bar ─────────────────────────────────────────────────────────────
@@ -839,7 +1220,17 @@ function wireVideoControls() {
   movieVideo.addEventListener('loadeddata', () => {
     markPlaybackProgress({ rendered: true });
     armRenderedFrameWatcher();
+    queueTrackControlRefresh();
   });
+
+  movieVideo.addEventListener('loadedmetadata', queueTrackControlRefresh);
+  movieVideo.addEventListener('emptied', resetTrackControls);
+  movieVideo.textTracks?.addEventListener?.('change', refreshCaptionOptions);
+  movieVideo.textTracks?.addEventListener?.('addtrack', queueTrackControlRefresh);
+  movieVideo.textTracks?.addEventListener?.('removetrack', queueTrackControlRefresh);
+  movieVideo.audioTracks?.addEventListener?.('change', refreshAudioTrackOptions);
+  movieVideo.audioTracks?.addEventListener?.('addtrack', queueTrackControlRefresh);
+  movieVideo.audioTracks?.addEventListener?.('removetrack', queueTrackControlRefresh);
 
   movieVideo.addEventListener('ended', () => {
     clearSyncPlaybackRate();
@@ -974,6 +1365,9 @@ lobbyBackBtn?.addEventListener('click', () => {
 // 5. REACTIONS
 // ═════════════════════════════════════════════════════════════════════════════
 
+// Export functions to window for use in HTML script
+window.formatFilenameWithInitials = formatFilenameWithInitials;
+
 function wireReactions() {
   if (reactionsWired) return;
   reactionsWired = true;
@@ -1087,8 +1481,8 @@ function updatePeerFileStatus(peerId, durationSec, fileName = null) {
   if (el) {
     let display = `File loaded &nbsp;<span class="fd-dur">${formatDur(durationSec)}</span>`;
     if (fileName) {
-      const truncated = truncateFileName(fileName, 20);
-      display = `${truncated} &nbsp;<span class="fd-dur">${formatDur(durationSec)}</span>`;
+      const formatted = formatFilenameWithInitials(fileName);
+      display = `${formatted} &nbsp;<span class="fd-dur">${formatDur(durationSec)}</span>`;
     }
     el.innerHTML = display;
   }
@@ -1104,6 +1498,24 @@ function truncateFileName(fileName, maxLength = 20) {
   const ext = fileName.substring(lastDotIndex);
   const nameLength = maxLength - 3 - ext.length;
   return fileName.substring(0, nameLength) + '...' + ext;
+}
+
+function formatFilenameWithInitials(fileName, maxNameChars = 15) {
+  const lastDotIndex = fileName.lastIndexOf('.');
+  if (lastDotIndex === -1) {
+    // No extension
+    return fileName.length <= maxNameChars ? fileName : fileName.substring(0, maxNameChars) + '.....';
+  }
+  
+  const ext = fileName.substring(lastDotIndex);
+  const nameWithoutExt = fileName.substring(0, lastDotIndex);
+  
+  if (nameWithoutExt.length <= maxNameChars) {
+    return fileName; // Fits without truncation
+  }
+  
+  // Truncate name and add dots before extension
+  return nameWithoutExt.substring(0, maxNameChars) + '.....' + ext;
 }
 
 function updatePeerReadyState(peerId, isReady) {

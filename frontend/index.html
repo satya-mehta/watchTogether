@@ -128,7 +128,7 @@ body{font-family:'Nunito',sans-serif;background:var(--bg);color:var(--text);min-
 .copy-btn{background:var(--primary);border:none;border-radius:30px;padding:7px 14px;font-family:'Nunito',sans-serif;font-size:12px;font-weight:700;color:#000;cursor:pointer;transition:opacity .2s,transform .12s;}
 .copy-btn:hover{opacity:.85;transform:scale(1.05);}
 
-.players{display:flex;gap:12px;width:100%;max-width:520px;}
+.players{display:flex;gap:12px;width:100%;max-width:600px;}
 .player-card{flex:1;background:var(--bg2);border:1px solid var(--border);border-radius:20px;padding:20px 16px;display:flex;flex-direction:column;gap:12px;}
 .player-card.you{border-color:rgba(99,102,241,.3);box-shadow:0 0 12px rgba(99,102,241,.1);}
 .ptag{font-size:10px;letter-spacing:2px;text-transform:uppercase;color:var(--text3);font-weight:700;}
@@ -144,6 +144,17 @@ body{font-family:'Nunito',sans-serif;background:var(--bg);color:var(--text);min-
 .fd-icon{font-size:20px;margin-bottom:5px;}
 .fd-label{font-size:12px;color:var(--text3);line-height:1.6;}
 .fd-dur{display:inline-block;margin-top:5px;font-size:11px;font-family:'Space Grotesk',monospace;color:var(--green);background:rgba(109,214,154,.12);border-radius:20px;padding:3px 10px;}
+.media-tools{display:flex;flex-direction:column;gap:8px;}
+.aux-picker{position:relative;display:block;border:1px solid rgba(255,255,255,.1);border-radius:12px;padding:12px 12px 11px;background:rgba(15,20,25,.54);cursor:pointer;transition:border-color .2s,background .2s,transform .12s;}
+.aux-picker input{position:absolute;inset:0;opacity:0;cursor:pointer;}
+.aux-picker:hover{border-color:rgba(99,102,241,.32);background:rgba(99,102,241,.08);transform:translateY(-1px);}
+.aux-picker.loaded{border-color:rgba(16,185,129,.4);background:rgba(16,185,129,.08);}
+.aux-picker-title{display:block;font-size:12px;font-weight:700;color:var(--text2);}
+.aux-picker-meta{display:block;margin-top:4px;font-size:11.5px;line-height:1.55;color:var(--text3);}
+.aux-clear{align-self:flex-start;padding:0;background:none;border:none;color:var(--text3);font:inherit;font-size:12px;font-weight:700;cursor:pointer;transition:color .2s,opacity .2s;}
+.aux-clear:hover:not(:disabled){color:var(--text2);}
+.aux-clear:disabled{opacity:.4;cursor:not-allowed;}
+.media-capability-note{font-size:11px;line-height:1.6;color:var(--text3);}
 
 .sync-row{display:flex;align-items:center;gap:12px;background:var(--bg2);border:1px solid var(--border);border-radius:14px;padding:14px 18px;max-width:520px;width:100%;}
 .sdot{width:9px;height:9px;border-radius:50%;flex-shrink:0;}
@@ -240,6 +251,27 @@ input[type=range]#seek-bar::-webkit-slider-thumb{appearance:none;width:14px;heig
 .time-row{display:flex;justify-content:space-between;margin-bottom:10px;}
 .time-txt{font-family:'Space Grotesk',monospace;font-size:11px;color:rgba(255,255,255,.35);}
 .ctrl-row{display:flex;align-items:center;gap:12px;}
+.track-row{display:grid;grid-template-columns:repeat(2,minmax(0,220px));gap:12px;margin-top:12px;max-width:460px;}
+.track-field{display:flex;flex-direction:column;gap:6px;min-width:0;}
+.track-label{font-size:10px;letter-spacing:1.8px;text-transform:uppercase;color:rgba(255,255,255,.42);font-weight:700;}
+.track-select{
+  width:100%;
+  padding:10px 12px;
+  border-radius:12px;
+  border:1px solid rgba(255,255,255,.14);
+  background:rgba(15,20,25,.82);
+  color:var(--text);
+  font-family:'Nunito',sans-serif;
+  font-size:13px;
+  outline:none;
+  transition:border-color .2s,box-shadow .2s,opacity .2s;
+}
+.track-select:focus{border-color:rgba(99,102,241,.7);box-shadow:0 0 0 3px rgba(99,102,241,.18);}
+.track-select:disabled{opacity:.58;cursor:not-allowed;color:rgba(255,255,255,.48);}
+.track-help{font-size:11px;line-height:1.55;color:rgba(255,255,255,.48);}
+.track-help[data-tone="ok"]{color:rgba(173,234,197,.88);}
+.track-help[data-tone="warn"]{color:rgba(255,198,136,.92);}
+.track-help[data-tone="info"]{color:rgba(245,247,250,.62);}
 .cb{background:none;border:none;cursor:pointer;color:rgba(255,255,255,.5);padding:4px;display:flex;align-items:center;justify-content:center;transition:color .15s;}
 .cb:hover{color:#fff;}
 .cb.pp{width:46px;height:46px;background:linear-gradient(135deg,var(--primary),var(--accent));border-radius:50%;color:#fff;box-shadow:0 0 16px rgba(0,212,255,.4);}
@@ -258,6 +290,12 @@ input[type=range]#seek-bar::-webkit-slider-thumb{appearance:none;width:14px;heig
 .call-btn:hover{background:rgba(99,102,241,.12);color:var(--primary);}
 .call-btn.danger{color:var(--red);}
 .call-btn.active{background:rgba(244,63,94,.15);color:var(--red);}
+
+@media (max-width: 640px){
+  .ctrl-bar{padding:0 14px 16px;}
+  .ctrl-row{gap:10px;}
+  .track-row{grid-template-columns:1fr;max-width:none;}
+}
 
 /* Countdown overlay */
 .countdown-overlay{position:fixed;inset:0;z-index:99999;background:rgba(20,18,26,.96);display:none;align-items:center;justify-content:center;flex-direction:column;gap:14px;}
@@ -464,6 +502,14 @@ input[type=range]#seek-bar::-webkit-slider-thumb{appearance:none;width:14px;heig
         <div class="fd-icon">🎬</div>
         <div class="fd-label" id="your-file-label">Tap to pick<br>your video file</div>
       </div>
+      <div class="media-tools">
+        <label class="aux-picker" id="subtitle-picker">
+          <input type="file" id="subtitle-input" accept=".vtt,.srt,text/vtt,application/x-subrip"/>
+          <span class="aux-picker-title">Optional captions</span>
+          <span class="aux-picker-meta" id="subtitle-file-label">Add your own local .srt or .vtt file</span>
+        </label>
+        <button class="aux-clear" id="subtitle-clear-btn" type="button" disabled>Clear captions</button>
+      </div>
     </div>
     <!-- Friend -->
     <div class="player-card" id="friend-card">
@@ -535,6 +581,22 @@ input[type=range]#seek-bar::-webkit-slider-thumb{appearance:none;width:14px;heig
       <button class="cb" id="fullscreen-btn">
         <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor"><path d="M7 14H5v5h5v-2H7v-3zm-2-4h2V7h3V5H5v5zm12 7h-3v2h5v-5h-2v3zM14 5v2h3v3h2V5h-5z"/></svg>
       </button>
+    </div>
+    <div class="track-row">
+      <label class="track-field" for="captions-select">
+        <span class="track-label">Captions</span>
+        <select class="track-select" id="captions-select" aria-label="Caption track" disabled>
+          <option value="">Load a movie first</option>
+        </select>
+        <span class="track-help" id="captions-help" data-tone="info">Load a movie, or add your own .srt/.vtt in the lobby.</span>
+      </label>
+      <label class="track-field" for="audio-track-select">
+        <span class="track-label">Audio</span>
+        <select class="track-select" id="audio-track-select" aria-label="Audio language" disabled>
+          <option value="">Load a movie first</option>
+        </select>
+        <span class="track-help" id="audio-track-help" data-tone="info">Audio choice stays local to you. Browser support varies for embedded tracks.</span>
+      </label>
     </div>
   </div>
 </div>
@@ -770,7 +832,8 @@ input[type=range]#seek-bar::-webkit-slider-thumb{appearance:none;width:14px;heig
   document.getElementById('file-input')?.addEventListener('change', e => {
     const f = e.target.files[0]; if(!f) return;
     document.getElementById('your-file-drop').classList.add('loaded');
-    document.getElementById('your-file-label').innerHTML = f.name + '<br><span class="fd-dur" id="your-dur">loading…</span>';
+    const formattedName = window.formatFilenameWithInitials?.(f.name) || f.name;
+    document.getElementById('your-file-label').innerHTML = formattedName + '<br><span class="fd-dur" id="your-dur">loading…</span>';
     const tmp = document.createElement('video');
     tmp.preload='metadata'; tmp.src=URL.createObjectURL(f);
     tmp.onloadedmetadata = () => {
