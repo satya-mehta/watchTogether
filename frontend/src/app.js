@@ -1,4 +1,3 @@
-
 import { WatchTogetherClient } from './client.js';
 import { VideoCall } from './webrtc.js';
 
@@ -1283,6 +1282,9 @@ function wireVideoControls() {
 async function startVideoCall() {
   if (call) return call;
   call = new VideoCall(client, localVideo, remoteVideo);
+  window.activeCall = call;
+
+  const remoteCamOff = document.getElementById('remote-cam-off');
 
   call
     .on('started', ({ hasVideo, hasAudio }) => {
@@ -1291,6 +1293,13 @@ async function startVideoCall() {
     })
     .on('remote_stream', () => {
       showCallUI(true);
+      if (remoteCamOff) remoteCamOff.style.display = 'none';
+    })
+    .on('remote_camera_off', () => {
+      if (remoteCamOff) remoteCamOff.style.display = 'flex';
+    })
+    .on('remote_camera_on', () => {
+      if (remoteCamOff) remoteCamOff.style.display = 'none';
     })
     .on('remote_play_blocked', () => {
       showToast('Tap once if your friend’s video does not appear', 'info');
@@ -1305,7 +1314,9 @@ async function startVideoCall() {
       showToast('Camera not available — audio only');
     })
     .on('ended', () => {
+      if (remoteCamOff) remoteCamOff.style.display = 'none';
       showCallUI(false);
+      window.activeCall = null;
       call = null;
     });
 
@@ -1322,24 +1333,21 @@ function retryPendingPlayback() {
 // ── Mute button ─────────────────────────────────────────────────────────────
 muteBtn?.addEventListener('click', () => {
   if (!call) return;
-  const muted = call.toggleMute();
-  muteBtn.classList.toggle('active', muted);
-  if (muteIcon) muteIcon.textContent = muted ? 'mic_off' : 'mic';
-  muteBtn.title = muted ? 'Unmute microphone' : 'Mute microphone';
-  muteBtn.setAttribute('aria-label', muted ? 'Unmute microphone' : 'Mute microphone');
+  call.toggleMute();
+  // Sync all button state from single source of truth (call.isMuted)
+  syncCallButtonState();
 });
 
 // ── Camera toggle ────────────────────────────────────────────────────────────
 cameraBtn?.addEventListener('click', () => {
   if (!call) return;
-  const hidden = call.toggleCamera();
-  cameraBtn.classList.toggle('active', hidden);
-  if (cameraIcon) cameraIcon.textContent = hidden ? 'videocam_off' : 'videocam';
-  cameraBtn.title = hidden ? 'Show camera' : 'Hide camera';
-  cameraBtn.setAttribute('aria-label', hidden ? 'Show camera' : 'Hide camera');
-
-  // Show/hide local video element
-  localVideo.style.opacity = hidden ? '0' : '1';
+  call.toggleCamera();
+  // Sync all button state from single source of truth (call.isCamOff)
+  // Small delay so _cameraEnabled flag has flipped before we read it
+  requestAnimationFrame(() => {
+    syncCallButtonState();
+    localVideo.style.opacity = call?.isCamOff ? '0' : '1';
+  });
 });
 
 // ── End call ─────────────────────────────────────────────────────────────────
@@ -1425,19 +1433,44 @@ function showCallUI(visible) {
       pipBubble.style.top = '20px';
       pipBubble.style.right = '20px';
     }
-    muteBtn?.classList.remove('active');
-    cameraBtn?.classList.remove('active');
-    if (muteBtn) {
-      muteBtn.title = 'Mute microphone';
-      muteBtn.setAttribute('aria-label', 'Mute microphone');
-    }
-    if (cameraBtn) {
-      cameraBtn.title = 'Hide camera';
-      cameraBtn.setAttribute('aria-label', 'Hide camera');
-    }
-    if (muteIcon) muteIcon.textContent = 'mic';
-    if (cameraIcon) cameraIcon.textContent = 'videocam';
-    localVideo.style.opacity = '1';
+
+    // BUG FIX: was unconditionally resetting icon/button state to defaults on
+    // every call, regardless of actual mic/camera state. This caused the mute
+    // icon to snap back to 'mic' every time the user switched screens (lobby ->
+    // watch) or tab-switched back, even though the mic was still muted.
+    // Fix: read the real state from the call object and reflect it accurately.
+    syncCallButtonState();
+
+    localVideo.style.opacity = call?.isCamOff ? '0' : '1';
+
+    // Re-call play() now that the pip is visible. Browsers won't render frames
+    // for a <video> that was played while inside a display:none container.
+    if (localVideo?.srcObject)  localVideo.play().catch(() => {});
+    if (remoteVideo?.srcObject) remoteVideo.play().catch(() => {});
+  }
+}
+
+/**
+ * Read the true mic/camera state from the call object and update every
+ * button, icon, title, and aria-label to match. Call this any time the
+ * call UI is shown or re-shown so it never drifts from reality.
+ */
+function syncCallButtonState() {
+  const muted  = call?.isMuted  ?? false;
+  const camOff = call?.isCamOff ?? false;
+
+  muteBtn?.classList.toggle('active', muted);
+  if (muteIcon) muteIcon.textContent = muted ? 'mic_off' : 'mic';
+  if (muteBtn) {
+    muteBtn.title = muted ? 'Unmute microphone' : 'Mute microphone';
+    muteBtn.setAttribute('aria-label', muted ? 'Unmute microphone' : 'Mute microphone');
+  }
+
+  cameraBtn?.classList.toggle('active', camOff);
+  if (cameraIcon) cameraIcon.textContent = camOff ? 'videocam_off' : 'videocam';
+  if (cameraBtn) {
+    cameraBtn.title = camOff ? 'Show camera' : 'Hide camera';
+    cameraBtn.setAttribute('aria-label', camOff ? 'Show camera' : 'Hide camera');
   }
 }
 

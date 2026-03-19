@@ -209,7 +209,7 @@ body{font-family:'Nunito',sans-serif;background:var(--bg);color:var(--text);min-
 .pip-live-txt{font-size:9px;letter-spacing:1px;color:rgba(255,255,255,.5);text-transform:uppercase;font-weight:600;}
 
 /* Self-view (tiny, bottom-left of PiP) */
-#local-video{position:absolute;bottom:0;left:0;width:36px;height:36px;object-fit:cover;border-radius:6px;opacity:.8;}
+#local-video{position:absolute;bottom:0;left:0;width:36px;height:36px;object-fit:cover;border-radius:6px;opacity:.8;z-index: 5;}
 
 /* Reactions sidebar */
 .reactions{position:absolute;right:18px;top:50%;transform:translateY(-50%);z-index:10;display:flex;flex-direction:column;gap:8px;pointer-events:all;}
@@ -611,6 +611,11 @@ input[type=range]#seek-bar::-webkit-slider-thumb{appearance:none;width:14px;heig
     <span class="pip-live-txt">Live</span>
   </div>
   <video id="remote-video" autoplay playsinline></video>
+  <!-- Shown when the remote peer has turned their camera off -->
+  <div id="remote-cam-off" style="display:none;position:absolute;inset:0;z-index:4;background:#1c1828;display:none;flex-direction:column;align-items:center;justify-content:center;gap:8px;border-radius:inherit;">
+    <span class="material-symbols-outlined" style="font-size:36px;color:rgba(184,169,217,0.55);">video_camera_front_off</span>
+    <span style="font-size:10px;letter-spacing:1.5px;text-transform:uppercase;color:rgba(184,169,217,0.4);font-weight:600;">Camera off</span>
+  </div>
   <video id="local-video" autoplay playsinline muted></video>
 </div>
 

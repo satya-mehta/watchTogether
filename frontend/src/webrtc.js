@@ -341,6 +341,20 @@ export class VideoCall extends EventTarget {
       event.track.onunmute = () => {
         console.log('[WebRTC] Remote track unmuted:', event.track.kind);
         attachRemoteStream();
+        if (event.track.kind === 'video') this._emit('remote_camera_on');
+      };
+      // When the remote peer turns camera off, their video track becomes muted
+      event.track.onmute = () => {
+        if (event.track.kind === 'video') {
+          console.log('[WebRTC] Remote camera turned off');
+          this._emit('remote_camera_off');
+        }
+      };
+      event.track.onended = () => {
+        if (event.track.kind === 'video') {
+          console.log('[WebRTC] Remote video track ended');
+          this._emit('remote_camera_off');
+        }
       };
     };
 
@@ -383,7 +397,10 @@ export class VideoCall extends EventTarget {
     // Two simultaneous setLocalDescription calls throw InvalidStateError
     // and the PC ends up stuck in a broken state.
     this.pc.onnegotiationneeded = async () => {
-      if (this.isInitiator) await this._createOffer();
+      // Perfect Negotiation: allow both peers to renegotiate so that
+      // camera/mic toggles by the non-host are also signalled to the remote.
+      // Glare (simultaneous offers) is resolved in _onSignal below.
+      await this._createOffer();
     };
   }
 
@@ -442,8 +459,26 @@ export class VideoCall extends EventTarget {
       case 'offer':
         console.log('[WebRTC] Received offer');
         if (!this._started) {
-          // Guest receives offer before calling start() — auto-start camera
           await this.start(false);
+        }
+        // Perfect Negotiation glare handling.
+        // If we are also in the middle of making an offer (race), the
+        // "impolite" peer (initiator) silently drops the incoming offer and
+        // keeps their own. The "polite" peer (non-initiator) rolls back their
+        // pending offer and accepts the incoming one instead.
+        {
+          const collision = this._makingOffer || this.pc?.signalingState !== 'stable';
+          if (collision) {
+            if (this.isInitiator) {
+              // Impolite peer — ignore the colliding incoming offer.
+              console.log('[WebRTC] Offer collision — impolite peer ignoring incoming offer');
+              break;
+            }
+            // Polite peer — roll back our pending offer and answer theirs.
+            console.log('[WebRTC] Offer collision — polite peer rolling back');
+            await this.pc.setLocalDescription({ type: 'rollback' }).catch(() => {});
+            this._makingOffer = false;
+          }
         }
         await this._createAnswer(signal.sdp);
         break;
