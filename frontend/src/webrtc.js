@@ -64,6 +64,9 @@ export class VideoCall extends EventTarget {
     this._unsubscribeClientEvents = [];
     this._remoteStreamTimer = null;
     this._disconnectTimer = null;
+    this._videoSender = null;     // track RTCRtpSender for video to replace when toggling camera
+    this._audioSender = null;     // track RTCRtpSender for audio to replace when toggling mute
+    this._cameraSwitching = false; // prevent overlapping camera switch requests
 
     // Wire incoming signals from the server relay
     this._unsubscribeClientEvents.push(
@@ -131,14 +134,101 @@ export class VideoCall extends EventTarget {
     return muted;
   }
 
-  /** Turn camera on / off. Returns new hidden state. */
+  /** Turn camera on / off. Releases camera resource when off, reacquires when on. Returns new hidden state. */
   toggleCamera() {
     const track = this._getTrack('video');
     if (!track) return true;
-    track.enabled = !track.enabled;
-    const hidden = !track.enabled;
-    this._emit('camera_changed', { hidden });
-    return hidden;
+
+    const isCurrentlyOn = track.enabled;
+    if (isCurrentlyOn) {
+      // Turn OFF: release camera resource
+      this._releaseCamera();
+    } else {
+      // Turn ON: reacquire camera resource
+      this._resumeCamera();
+    }
+    return !isCurrentlyOn; // return new hidden state
+  }
+
+  /**
+   * Release camera resource when turning off video.
+   * Stops the video track and removes it from the peer connection.
+   */
+  async _releaseCamera() {
+    if (this._cameraSwitching) return;
+    this._cameraSwitching = true;
+
+    try {
+      // Stop the video track (releases camera hardware)
+      const videoTrack = this._getTrack('video');
+      if (videoTrack) {
+        videoTrack.stop();
+        this.localStream?.removeTrack(videoTrack);
+      }
+
+      // Remove video sender from peer connection
+      if (this._videoSender && this.pc) {
+        try {
+          await this.pc.removeTrack(this._videoSender);
+        } catch (err) {
+          console.warn('[WebRTC] Failed to remove video track from peer connection:', err);
+        }
+        this._videoSender = null;
+      }
+
+      // Signal to peer that camera is off
+      this._emit('camera_changed', { hidden: true });
+      console.log('[WebRTC] Camera released — hardware resource freed');
+    } catch (err) {
+      console.error('[WebRTC] Error releasing camera:', err);
+    } finally {
+      this._cameraSwitching = false;
+    }
+  }
+
+  /**
+   * Resume camera when turning on video.
+   * Requests new camera stream and adds it to peer connection.
+   */
+  async _resumeCamera() {
+    if (this._cameraSwitching) return;
+    this._cameraSwitching = true;
+
+    try {
+      // Request new camera stream
+      const videoStream = await navigator.mediaDevices.getUserMedia({
+        video: { width: { ideal: 640 }, height: { ideal: 480 }, facingMode: 'user' },
+      }).catch(err => {
+        console.warn('[WebRTC] Camera unavailable on resume:', err.message);
+        this._emit('camera_unavailable');
+        throw err;
+      });
+
+      const videoTrack = videoStream.getVideoTracks()[0];
+      if (!videoTrack) throw new Error('No video track in resumed stream');
+
+      // Update local stream with new video track
+      this.localStream?.addTrack(videoTrack);
+
+      // Add video track to peer connection
+      if (this.pc) {
+        this._videoSender = await this.pc.addTrack(videoTrack, this.localStream);
+        console.log('[WebRTC] Video track added to peer connection');
+      }
+
+      // Update local video element to show new stream
+      this.localEl.srcObject = this.localStream;
+      this.localEl.play?.().catch(() => {});
+
+      // Signal to peer that camera is on
+      this._emit('camera_changed', { hidden: false });
+      console.log('[WebRTC] Camera resumed — new stream acquired');
+    } catch (err) {
+      console.error('[WebRTC] Error resuming camera:', err);
+      this._emit('camera_unavailable');
+    } finally {
+      this._cameraSwitching = false;
+    }
   }
 
   get isMuted()    { return !this._getTrack('audio')?.enabled ?? true; }
@@ -160,6 +250,9 @@ export class VideoCall extends EventTarget {
     this.pc?.close();
     this.pc          = null;
     this.localStream = null;
+    this._videoSender = null;
+    this._audioSender = null;
+    this._cameraSwitching = false;
     this._remotePlayBlocked = false;
     this.localEl.srcObject  = null;
     this.remoteEl.srcObject = null;
@@ -179,9 +272,11 @@ export class VideoCall extends EventTarget {
 
     this.pc = new RTCPeerConnection({ iceServers: ICE_SERVERS });
 
-    // Add local tracks to the connection
+    // Add local tracks to the connection and track senders
     this.localStream.getTracks().forEach(track => {
-      this.pc.addTrack(track, this.localStream);
+      const sender = this.pc.addTrack(track, this.localStream);
+      if (track.kind === 'video') this._videoSender = sender;
+      if (track.kind === 'audio') this._audioSender = sender;
     });
 
     // When we get remote tracks, attach them to the remote video element
