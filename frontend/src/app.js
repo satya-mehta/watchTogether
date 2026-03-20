@@ -936,6 +936,7 @@ async function autoJoinFromPath() {
     isHost = false;
     clearLandingNotice();
     myName = prompt('Your name?') || 'Guest';
+
     showLobby(roomCode);
     await connectAndJoin();
   } catch (err) {
@@ -1421,6 +1422,13 @@ function showLobby(code) {
     window.history.replaceState({}, '', roomPath);
   }
   window.setRoomCode(code);  // Update share link in HTML
+  const playerCard = document.querySelector('.player-card.you');
+  if (playerCard) {
+    const pTag = playerCard.querySelector('.ptag.pmyself');
+    if (pTag) {
+        pTag.textContent = 'You • ' + myName;
+    }
+}
 }
 
 function showCallUI(visible) {
@@ -1491,6 +1499,7 @@ function addPeerToUI(peer) {
   if (!el) return;
   el.querySelector('.pname').textContent = peer.name;
   el.querySelector('.pav').textContent   = peer.name.slice(0, 2).toUpperCase();
+  el.querySelector('.pfriend').textContent = 'Friend • ' + peer.name;
   const fileLabelEl = document.getElementById('friend-file-label');
   const friendIconEl = document.querySelector('#friend-card .file-drop .fd-icon');
   if (fileLabelEl) fileLabelEl.innerHTML = 'Waiting for<br>your friend to choose a file';
@@ -1502,6 +1511,7 @@ function removePeerFromUI(peerId) {
   if (!el) return;
   el.querySelector('.pname').textContent = 'Waiting…';
   el.querySelector('.pav').textContent   = '?';
+  el.querySelector('.pfriend').textContent = 'Friend';
   const fileLabelEl = document.getElementById('friend-file-label');
   const friendIconEl = document.querySelector('#friend-card .file-drop .fd-icon');
   if (fileLabelEl) fileLabelEl.innerHTML = 'Waiting for<br>your friend to join';

@@ -209,7 +209,7 @@ body{font-family:'Nunito',sans-serif;background:var(--bg);color:var(--text);min-
 .pip-live-txt{font-size:9px;letter-spacing:1px;color:rgba(255,255,255,.5);text-transform:uppercase;font-weight:600;}
 
 /* Self-view (tiny, bottom-left of PiP) */
-#local-video{position:absolute;bottom:0;left:0;width:36px;height:36px;object-fit:cover;border-radius:6px;opacity:.8;z-index: 5;}
+#local-video{position:absolute;bottom:0;right:0;width:36px;height:36px;object-fit:cover;border: 0.5px solid darkslategray ;border-radius:6px;opacity:.8;z-index: 5;}
 
 /* Reactions sidebar */
 .reactions{position:absolute;right:18px;top:50%;transform:translateY(-50%);z-index:10;display:flex;flex-direction:column;gap:8px;pointer-events:all;}
@@ -494,7 +494,7 @@ input[type=range]#seek-bar::-webkit-slider-thumb{appearance:none;width:14px;heig
   <div class="players">
     <!-- You -->
     <div class="player-card you">
-      <div class="ptag">You · host</div>
+      <div class="ptag pmyself">You</div>
       <div class="pav pav-you" id="your-avatar">YO</div>
       <div class="pname" id="your-name">You</div>
       <div class="file-drop" id="your-file-drop">
@@ -513,7 +513,7 @@ input[type=range]#seek-bar::-webkit-slider-thumb{appearance:none;width:14px;heig
     </div>
     <!-- Friend -->
     <div class="player-card" id="friend-card">
-      <div class="ptag">Friend · guest</div>
+      <div class="ptag pfriend">Friend</div>
       <div class="pav pav-them" id="friend-avatar">?</div>
       <div class="pname pname-wait" id="friend-name">Waiting…</div>
       <div class="file-drop" style="pointer-events:none;">
