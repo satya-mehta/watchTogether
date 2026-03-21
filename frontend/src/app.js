@@ -1536,6 +1536,23 @@ function wireVideoControls() {
     if (!isAtVideoEnd() && playbackRetryPending) {
       showToast('Tap play to resume', 'info');
     }
+    // Native controls (Safari, fullscreen overlay, OS media keys) fire 'pause'
+    // without going through our play/pause button. Treat this exactly like a
+    // button press so the other peer stays in sync.
+    // Guard: only broadcast if we are on the watch screen with a peer present.
+    // The dedup window in sendPlayPauseCommand (300ms, same state) absorbs the
+    // echo that fires when OUR button click causes movieVideo.pause() itself.
+    if (isWatchScreenActive() && peerPresent && !isAtVideoEnd()) {
+      sendPlayPauseCommand(false, movieVideo.currentTime);
+    }
+  });
+
+  movieVideo.addEventListener('play', () => {
+    // Same as above for the play direction — native play (e.g. Safari overlay,
+    // media key, or Picture-in-Picture resume) should sync to the other peer.
+    if (isWatchScreenActive() && peerPresent) {
+      sendPlayPauseCommand(true, movieVideo.currentTime);
+    }
   });
 
   document.addEventListener('pointerup', retryPendingPlayback, true);
@@ -1630,12 +1647,10 @@ muteBtn?.addEventListener('click', () => {
 cameraBtn?.addEventListener('click', () => {
   if (!call) return;
   call.toggleCamera();
-  // Sync all button state from single source of truth (call.isCamOff)
-  // Small delay so _cameraEnabled flag has flipped before we read it
-  requestAnimationFrame(() => {
-    syncCallButtonState();
-    localVideo.style.opacity = call?.isCamOff ? '0' : '1';
-  });
+  // Opacity is now managed inside webrtc.js (_releaseCamera/_resumeCamera)
+  // to avoid a race between the async toggle and this sync read.
+  // We just update the button icon state here.
+  requestAnimationFrame(() => syncCallButtonState());
 });
 
 // ── End call ─────────────────────────────────────────────────────────────────
@@ -1736,7 +1751,9 @@ function showCallUI(visible) {
     // Fix: read the real state from the call object and reflect it accurately.
     syncCallButtonState();
 
-    localVideo.style.opacity = call?.isCamOff ? '0' : '1';
+    // Only reset opacity to 1 if camera is actually on.
+    // If it's off, webrtc.js already set opacity to 0 — don't override it.
+    if (!call?.isCamOff) localVideo.style.opacity = '1';
 
     // Re-call play() now that the pip is visible. Browsers won't render frames
     // for a <video> that was played while inside a display:none container.
@@ -2045,9 +2062,25 @@ function onYtStateChange(state) {
   const wasPlaying = !ytIsPaused;
   ytIsPaused = nowPaused;
   window.ytPlayStateUpdate?.(state === 1);
+
   if (state === 0 && wasPlaying) {
-    // Video ended — tell the other peer to pause
+    // Video ended — tell the other peer to pause at the end
     sendPlayPauseCommand(false, ytDuration || ytCurrentTime);
+    return;
+  }
+
+  // State 1 = playing, state 2 = paused.
+  // These can be triggered by YouTube's own overlay controls (the big play
+  // button that appears in the centre of the embed in some browsers/contexts)
+  // without going through our custom play/pause button. Broadcast the state
+  // change so the other peer stays in sync.
+  // The dedup window in sendPlayPauseCommand absorbs the echo that fires when
+  // OUR button causes ytPlayer.playVideo/pauseVideo which triggers this event.
+  if (!isWatchScreenActive() || !peerPresent) return;
+  if (state === 1) {
+    sendPlayPauseCommand(true, ytCurrentTime);
+  } else if (state === 2) {
+    sendPlayPauseCommand(false, ytCurrentTime);
   }
 }
 

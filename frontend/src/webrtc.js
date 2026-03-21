@@ -185,19 +185,24 @@ export class VideoCall extends EventTarget {
     if (this._cameraSwitching) return;
     this._cameraSwitching = true;
     try {
+      // BUG FIX: do NOT call removeTrack() or stop() the track.
+      // removeTrack() triggers onnegotiationneeded → a new offer → ICE restart,
+      // which causes the remote video to blank out permanently and the connection
+      // to thrash. stop() permanently kills the track; it can never be re-enabled.
+      //
+      // The correct approach: just disable the track. This sends black/silent
+      // frames to the remote peer (they see the camera-off state) without
+      // touching the PC negotiation at all. No renegotiation, no ICE restart.
       const videoTrack = this._getTrack('video');
       if (videoTrack) {
-        videoTrack.stop();
-        this.localStream?.removeTrack(videoTrack);
+        videoTrack.enabled = false;
       }
-      if (this._videoSender && this.pc) {
-        try { await this.pc.removeTrack(this._videoSender); } catch {}
-        this._videoSender = null;
-      }
+      // Hide local preview so the user doesn’t see their own frozen frame
+      if (this.localEl) this.localEl.style.opacity = '0';
       this._emit('camera_changed', { hidden: true });
-      console.log('[WebRTC] Camera released');
+      console.log('[WebRTC] Camera disabled (track muted, no renegotiation)');
     } catch (err) {
-      console.error('[WebRTC] Error releasing camera:', err);
+      console.error('[WebRTC] Error disabling camera:', err);
     } finally {
       this._cameraSwitching = false;
     }
@@ -207,6 +212,23 @@ export class VideoCall extends EventTarget {
     if (this._cameraSwitching) return;
     this._cameraSwitching = true;
     try {
+      // BUG FIX: if the track still exists and was only disabled, just re-enable it.
+      // This is the fast path — no getUserMedia, no renegotiation, no ICE restart.
+      const existingTrack = this._getTrack('video');
+      if (existingTrack) {
+        existingTrack.enabled = true;
+        if (this.localEl) {
+          this.localEl.style.opacity = '1';
+          this.localEl.play().catch(() => {});
+        }
+        this._emit('camera_changed', { hidden: false });
+        console.log('[WebRTC] Camera re-enabled (track unmuted, no renegotiation)');
+        return;
+      }
+
+      // Slow path: track was stopped (e.g. OS revoked it) — acquire a new one.
+      // We replace the sender’s track via replaceTrack() which swaps the media
+      // without triggering renegotiation (unlike removeTrack+addTrack).
       const videoStream = await navigator.mediaDevices.getUserMedia({
         video: { width: { ideal: 640 }, height: { ideal: 480 }, facingMode: 'user' },
       }).catch(err => {
@@ -218,20 +240,23 @@ export class VideoCall extends EventTarget {
       const videoTrack = videoStream.getVideoTracks()[0];
       if (!videoTrack) throw new Error('No video track in resumed stream');
 
-      this.localStream?.addTrack(videoTrack);
-      if (this.pc) {
-        // addTrack returns RTCRtpSender synchronously
+      // replaceTrack swaps media mid-call with zero renegotiation
+      if (this._videoSender) {
+        await this._videoSender.replaceTrack(videoTrack);
+      } else if (this.pc) {
         this._videoSender = this.pc.addTrack(videoTrack, this.localStream);
       }
 
-      // Refresh local preview
+      this.localStream?.addTrack(videoTrack);
+
       if (this.localEl) {
         this.localEl.srcObject = this.localStream;
+        this.localEl.style.opacity = '1';
         this.localEl.play().catch(() => {});
       }
 
       this._emit('camera_changed', { hidden: false });
-      console.log('[WebRTC] Camera resumed');
+      console.log('[WebRTC] Camera resumed via new track (replaceTrack)');
     } catch (err) {
       console.error('[WebRTC] Error resuming camera:', err);
       this._emit('camera_unavailable');
