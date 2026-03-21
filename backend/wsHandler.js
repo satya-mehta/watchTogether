@@ -143,7 +143,7 @@ function handleConnection(ws, req, roomManager) {
           lastUpdatedAt: Date.now(),
           masterId: initialMasterId,
         };
-        broadcast(myRoom, 'countdown_start', { positionSec: 0 });
+        broadcast(myRoom, 'countdown_start', { positionSec: 0, serverTs: Date.now() });
         console.log(`[Sync] ${myRoom.code} both ready → countdown (master: ${initialMasterId.slice(0,8)})`);
       }
       return;

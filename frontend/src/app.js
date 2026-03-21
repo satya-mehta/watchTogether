@@ -1134,21 +1134,36 @@ function wireClientEvents() {
     updatePeerReadyState(peerId, isReady);
   });
 
-  client.on('countdown_start', ({ positionSec }) => {
+  client.on('countdown_start', ({ positionSec, serverTs }) => {
+    // Calculate how many seconds are left in the countdown based on network
+    // latency. If serverTs is missing (old backend), default to 3.
+    const elapsedSec = serverTs ? (Date.now() - serverTs) / 1000 : 0;
+    const startFrom  = Math.max(1, 3 - elapsedSec); // never go below 1
+
     if (roomMode === 'youtube') {
       if (ytPlayer && ytPlayerReady) ytPlayer.seekTo(positionSec, true);
       ytCurrentTime = positionSec;
     } else {
       movieVideo.currentTime = positionSec;
     }
+
     startCountdown(() => {
       showWatchScreen();
       showCallUI(!!call);
       if (roomMode === 'youtube') {
-        // The countdown overlay provides the user gesture that satisfies autoplay policy
-        setTimeout(() => { if (ytPlayer && ytPlayerReady) { ytPlayer.playVideo(); ytIsPaused = false; } }, 150);
+        // Countdown overlay provides the user gesture autoplay needs.
+        // Retry every 500ms up to 4s in case player is still loading.
+        const tryPlay = (attempts = 0) => {
+          if (ytPlayer && ytPlayerReady) {
+            ytPlayer.playVideo();
+            ytIsPaused = false;
+          } else if (attempts < 8) {
+            setTimeout(() => tryPlay(attempts + 1), 500);
+          }
+        };
+        tryPlay();
       }
-    });
+    }, startFrom);
   });
 
   client.on('return_to_lobby', ({ name }) => {
@@ -1183,15 +1198,22 @@ function wireClientEvents() {
     if (!videoId) return;
     const isMine = fromPeerId === client.peerId;
     if (!isMine) {
-      // Friend shared the link — load it on our side too
+      // Switch receiver to YouTube mode if not already there
+      if (roomMode !== 'youtube') {
+        setRoomModeUI('youtube', false); // don't re-broadcast the mode change
+      }
+      // Populate the input so the receiver can see and optionally change the link
+      const ytInput = document.getElementById('yt-url-input');
+      if (ytInput) ytInput.value = `https://www.youtube.com/watch?v=${videoId}`;
+      document.getElementById('yt-clear-btn')?.classList.add('show');
       updateFriendYtPreview(videoId, title);
       setSyncStatus(`${getPeerDisplayName()} shared a YouTube video — loading…`, 'idle');
       showToast(`${getPeerDisplayName()} shared: ${title || videoId}`, 'info');
-      const ytInput = document.getElementById('yt-url-input');
-      if (ytInput) { ytInput.value = `https://www.youtube.com/watch?v=${videoId}`; }
-      document.getElementById('yt-clear-btn')?.classList.add('show');
       if (videoId !== ytVideoId) {
-        await processYtUrl(videoId).catch(err => console.warn('[YT] auto-load failed:', err));
+        // broadcast:false so the receiver doesn't echo the link back, which would
+        // trigger a spurious peer_youtube_link on the sender and reset their ready state
+        await processYtUrl(videoId, { broadcast: false })
+          .catch(err => console.warn('[YT] auto-load failed:', err));
       }
     }
     resetReadyState({ disable: true });
@@ -1442,10 +1464,11 @@ function wireVideoControls() {
     const nowReady = readyBtn.dataset.ready !== 'true';
     readyBtn.dataset.ready = nowReady;
     readyBtn.textContent   = nowReady ? "✓ Let's go!" : "I'm ready 🍿";
+    readyBtn.classList.toggle('active', nowReady);
     client.setReady(nowReady);
 
     if (nowReady && !peerPresent) {
-      showToast('Waiting for your friend to join, load the same file, and get ready');
+      showToast('Waiting for your friend to join and get ready');
     }
   });
 }
@@ -1744,16 +1767,26 @@ function updatePeerReadyState(peerId, isReady) {
 }
 
 let countdownTimer = null;
-function startCountdown(onDone) {
+function startCountdown(onDone, startFrom = 3) {
+  // Clear any existing countdown first — prevents two overlapping intervals
+  // which caused one user to enter the watch screen 3-4s after the other.
+  clearInterval(countdownTimer);
+  countdownTimer = null;
+
   const el = document.getElementById('countdown-number');
   const overlay = document.getElementById('countdown-overlay');
   overlay?.classList.add('show');
-  let n = 3;
+
+  // If we're catching up (received countdown_start late due to network latency),
+  // start from wherever we actually are in the countdown rather than always 3.
+  let n = Math.max(1, Math.min(3, Math.round(startFrom)));
   if (el) el.textContent = n;
+
   countdownTimer = setInterval(() => {
     n--;
-    if (n === 0) {
+    if (n <= 0) {
       clearInterval(countdownTimer);
+      countdownTimer = null;
       overlay?.classList.remove('show');
       onDone();
     } else {
@@ -1819,17 +1852,21 @@ async function initYtPlayer(videoId) {
   await loadYouTubeAPI();
   if (ytPlayer && ytPlayerReady) {
     // Reuse existing player — just load new video
-    ytPlayer.loadVideoById({ videoId, suggestedQuality: 'default' });
+    ytPlayer.cueVideoById({ videoId }); // cue first so onError fires before play
     ytVideoId     = videoId;
     ytCurrentTime = 0;
-    // getDuration may not be available immediately after load; poll for it
+    ytDuration    = 0;
+    // Wait for the player to report a valid duration (proves video loaded)
+    // or for onError to fire (which sets ytVideoId = null via the error handler)
     let attempts = 0;
     await new Promise(res => {
       const poll = setInterval(() => {
         const d = ytPlayer.getDuration?.() ?? 0;
-        if (d > 0 || ++attempts > 20) { clearInterval(poll); ytDuration = d; res(); }
+        const errored = ytVideoId === null; // onError cleared it
+        if (d > 0 || errored || ++attempts > 25) { clearInterval(poll); ytDuration = d; res(); }
       }, 200);
     });
+    if (ytVideoId === null) throw new Error('Video has embedding disabled or is unavailable.');
     return;
   }
   // First-time player creation
@@ -1859,8 +1896,19 @@ async function initYtPlayer(videoId) {
         onStateChange(e) { onYtStateChange(e.data); },
         onError(e) {
           console.error('[YT] Player error code:', e.data);
-          showToast('YouTube video unavailable or restricted', 'warn');
-          reject(new Error('YT error ' + e.data));
+          // Error codes: 2=bad videoId, 5=HTML5 error, 100=not found/private,
+          // 101/150=embedding disabled by uploader (most common restriction)
+          const msg = (e.data === 101 || e.data === 150)
+            ? 'This video has embedding disabled by the uploader. Try a different video.'
+            : (e.data === 100)
+            ? 'Video not found or set to private.'
+            : `YouTube player error (code ${e.data})`;
+          showToast(msg, 'warn');
+          setSyncStatus(msg, 'warn');
+          ytVideoId = null;
+          ytPlayerReady = false;
+          resetReadyState({ disable: true });
+          reject(new Error(msg));
         },
       },
     });
@@ -1961,8 +2009,14 @@ function setRoomModeUI(mode, sendWs = true) {
   }
 
   resetReadyState({ disable: true });
-  client?.setReady(false);
-  if (sendWs && client) client._send('mode_change', { mode });
+  // Only notify the server of ready/mode state when we're the one initiating
+  // the change (sendWs=true). Internal calls like peer_mode_change reflection
+  // and leaveWatchToLobby must NOT send ready_toggle — that's what caused the
+  // "peer_ready isReady:false" spam and mid-countdown ready-state corruption.
+  if (sendWs && client) {
+    client.setReady(false);
+    client._send('mode_change', { mode });
+  }
 }
 
 // ── Friend card dynamic content ───────────────────────────────────────────
@@ -2059,7 +2113,7 @@ function wireYouTubeLobby() {
 }
 
 // ── Process a YouTube video ID: fetch info → create player → broadcast ────
-async function processYtUrl(videoId) {
+async function processYtUrl(videoId, { broadcast = true } = {}) {
   if (videoId === ytVideoId && ytPlayerReady) return; // already loaded
   const loadEl  = document.getElementById('yt-loading');
   const prevEl  = document.getElementById('yt-preview');
@@ -2085,12 +2139,15 @@ async function processYtUrl(videoId) {
     await initYtPlayer(videoId);
     if (durEl && ytDuration > 0) durEl.textContent = formatDur(ytDuration);
 
-    // Broadcast the link to the other peer
-    client?._send('youtube_link', { videoId, title: info.title || 'YouTube Video' });
-    // Report our own duration through the existing file_ready mechanism
+    if (broadcast) {
+      // Broadcast the link to the other peer (only when we are the originator)
+      client?._send('youtube_link', { videoId, title: info.title || 'YouTube Video' });
+      setSyncStatus('Waiting for your friend to load the same video', 'idle');
+    } else {
+      setSyncStatus('Video loaded — you can mark ready!', 'idle');
+    }
+    // Report our duration through the existing file_ready mechanism — both sides do this
     client?.fileReady(ytDuration, info.title || videoId);
-
-    setSyncStatus('Waiting for your friend to load the same video', 'idle');
     resetReadyState({ disable: true });
   } catch (err) {
     console.error('[YT] processYtUrl failed:', err);

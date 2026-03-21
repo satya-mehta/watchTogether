@@ -405,6 +405,24 @@ input[type=range]#seek-bar::-webkit-slider-thumb{appearance:none;width:14px;heig
 #yt-player-wrap.active{display:block;}
 #yt-player{width:100%;height:100%;}
 
+
+/* ── YouTube peer notices (shown in your own card when friend picks YouTube) */
+.yt-peer-notice{
+  display:none;
+  align-items:flex-start;
+  gap:8px;
+  background:rgba(255,68,68,.08);
+  border:1px solid rgba(255,68,68,.22);
+  border-radius:10px;
+  padding:9px 11px;
+  font-size:11.5px;
+  line-height:1.55;
+  color:var(--text2);
+  animation:ytFadeIn .2s ease;
+}
+.yt-peer-notice strong{color:var(--text);}
+.yt-peer-notice-icon{flex-shrink:0;font-size:14px;}
+
 </style>
 </head>
 <body>
