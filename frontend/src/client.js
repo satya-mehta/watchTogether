@@ -260,6 +260,15 @@ class WatchTogetherClient extends EventTarget {
         this._emit('return_to_lobby', rest);
         break;
 
+      // YouTube room-level events — were missing, causing silent drops
+      case 'peer_mode_change':
+        this._emit('peer_mode_change', rest);
+        break;
+
+      case 'peer_youtube_link':
+        this._emit('peer_youtube_link', rest);
+        break;
+
       case 'error':
         console.error('[WT] Server error:', rest.message);
         this._emit('error', rest);

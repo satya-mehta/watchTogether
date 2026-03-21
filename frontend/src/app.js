@@ -122,8 +122,9 @@ let ytCurrentTime   = 0;
 let ytDuration      = 0;
 let ytIsPaused      = true;
 let ytPollingTimer  = null;
-let ytApiLoadPromise = null;
-let isSeeking       = false;    // moved to module level so ytPolling can read it
+let ytApiLoadPromise  = null;
+let ytPlayerInitPromise = null; // mutex — only one initYtPlayer() runs at a time
+let isSeeking         = false;  // moved to module level so ytPolling can read it
 
 const SOFT_SYNC_THRESHOLD_SEC = 0.8;
 const HARD_SYNC_THRESHOLD_SEC = 4;
@@ -748,7 +749,13 @@ async function handleSyncCorrection({ positionSec, playing, serverTs, drift, sou
 function leaveWatchToLobby({ clearFile = false, keepCall = true, notice = '' } = {}) {
   clearSyncPlaybackRate();
   if (roomMode === 'youtube') {
-    if (ytPlayer && ytPlayerReady) { ytPlayer.pauseVideo(); ytPlayer.seekTo(0, true); }
+    // Guard with typeof checks — if the player was torn down mid-init the
+    // YT.Player stub exists but its methods aren't real yet, which threw
+    // "pauseVideo is not a function". typeof guards are safer than ytPlayerReady alone.
+    if (ytPlayer && ytPlayerReady && typeof ytPlayer.pauseVideo === 'function') {
+      ytPlayer.pauseVideo();
+      ytPlayer.seekTo(0, true);
+    }
     ytIsPaused = true; ytCurrentTime = 0;
   } else {
     movieVideo.pause();
@@ -837,7 +844,7 @@ function resetToLanding(message = '') {
 function leaveRoomAndGoHome(message = '') {
   clearSyncPlaybackRate();
   if (roomMode === 'youtube') {
-    if (ytPlayer && ytPlayerReady) { ytPlayer.pauseVideo(); ytPlayer.seekTo(0, true); }
+    if (ytPlayer && ytPlayerReady && typeof ytPlayer.pauseVideo === 'function') { ytPlayer.pauseVideo(); ytPlayer.seekTo(0, true); }
     ytIsPaused = true; ytCurrentTime = 0;
     clearYtVideoSelection();
     stopYtPolling();
@@ -1134,16 +1141,23 @@ function wireClientEvents() {
     updatePeerReadyState(peerId, isReady);
   });
 
-  client.on('countdown_start', ({ positionSec, serverTs }) => {
+  client.on('countdown_start', async ({ positionSec, serverTs }) => {
     // Compute how many countdown seconds remain based on when server fired this.
     // Peers receive it at slightly different times; startFrom corrects for that so
     // both enter the watch screen at the same real-world moment.
     const elapsedSec = serverTs ? Math.max(0, (Date.now() - serverTs) / 1000) : 0;
     const startFrom  = Math.max(1, 3 - elapsedSec);
 
-    // Seek immediately — no async wait. An 8s await caused HOST and GUEST to start
-    // their countdowns seconds apart, landing on the watch screen at different times.
+    // Seek to start position. For YouTube we must wait for the player to be
+    // ready before calling seekTo — if the receiver's background init is still
+    // in-flight, awaiting the mutex promise here ensures we don't call methods
+    // on a partially-constructed YT.Player object (which threw the
+    // "seekTo is not a function" error).
     if (roomMode === 'youtube') {
+      // Wait for any in-progress player init to finish (non-blocking if already done)
+      if (ytPlayerInitPromise) {
+        try { await ytPlayerInitPromise; } catch {/* init errors are handled inside */}
+      }
       if (ytPlayer && ytPlayerReady) ytPlayer.seekTo(positionSec, true);
       ytCurrentTime = positionSec;
     } else {
@@ -1153,18 +1167,16 @@ function wireClientEvents() {
     startCountdown(() => {
       showWatchScreen();
       showCallUI(!!call);
+      // Autoplay is intentionally disabled — both peers land on the watch
+      // screen paused at position 0. Either peer can press play to start,
+      // and the play_pause sync command will bring the other peer along.
       if (roomMode === 'youtube') {
-        // Countdown overlay click is the user gesture autoplay needs.
-        // Retry every 500ms up to 4s in case player is still loading.
-        const tryPlay = (attempts = 0) => {
-          if (ytPlayer && ytPlayerReady) {
-            ytPlayer.playVideo();
-            ytIsPaused = false;
-          } else if (attempts < 8) {
-            setTimeout(() => tryPlay(attempts + 1), 500);
-          }
-        };
-        tryPlay();
+        if (ytPlayer && ytPlayerReady && typeof ytPlayer.pauseVideo === 'function') {
+          ytPlayer.pauseVideo();
+        }
+        ytIsPaused = true;
+      } else {
+        movieVideo.pause();
       }
     }, startFrom);
   });
@@ -1182,16 +1194,25 @@ function wireClientEvents() {
 
   // ── YouTube room-level events ──────────────────────────────────────────
   client.on('peer_mode_change', ({ peerId, name, mode }) => {
-    if (mode === roomMode) return; // already in sync
+    // If this echo is our own action (sender already applied the mode), just update
+    // the friend card UI and return — don't re-broadcast or reset ready state twice.
+    const isMine = peerId === client.peerId;
+    if (isMine) {
+      // Friend card should reflect the mode the OTHER peer will now be in.
+      // Since we just switched, show the friend's card as "waiting" for their side.
+      updateFriendCardForMode(mode);
+      return;
+    }
 
-    // Auto-switch our own mode to match the friend's (sendWs=false = no re-broadcast)
-    setRoomModeUI(mode, false);
+    // Peer-initiated mode change — auto-switch our UI to match
+    if (mode !== roomMode) {
+      setRoomModeUI(mode, false);
+    }
     updateFriendCardForMode(mode);
     resetReadyState({ disable: true });
 
     if (mode === 'youtube') {
       clearYtVideoSelection();
-      // Show notice both as toast AND as sync status so it's impossible to miss
       const msg = `${name || 'Your friend'} switched to YouTube mode`;
       showToast(msg, 'info');
       setSyncStatus(`📺 ${name || 'Your friend'} switched to YouTube — paste a link to start`, 'idle');
@@ -1205,51 +1226,66 @@ function wireClientEvents() {
   client.on('peer_youtube_link', async ({ fromPeerId, videoId, title, duration }) => {
     if (!videoId) return;
     const isMine = fromPeerId === client.peerId;
-    if (!isMine) {
-      // Auto-switch to YouTube mode if we're not already there (no re-broadcast)
-      if (roomMode !== 'youtube') setRoomModeUI('youtube', false);
 
-      // Populate the input field so the receiver can see + optionally change the link
-      const ytInput = document.getElementById('yt-url-input');
-      if (ytInput) ytInput.value = `https://www.youtube.com/watch?v=${videoId}`;
-      document.getElementById('yt-clear-btn')?.classList.add('show');
+    // The sender already handled their own UI in processYtUrl — skip to avoid double work
+    if (isMine) return;
 
-      // Show friend's video in the friend card preview
-      updateFriendYtPreview(videoId, title);
+    // Auto-switch to YouTube mode if we're not already there (no re-broadcast)
+    if (roomMode !== 'youtube') setRoomModeUI('youtube', false);
 
-      // Show own preview card immediately using thumbnail URL (no oEmbed needed)
-      const prevEl  = document.getElementById('yt-preview');
-      const thumbEl = document.getElementById('yt-thumb');
-      const titleEl = document.getElementById('yt-title');
-      const durEl   = document.getElementById('yt-dur');
-      if (thumbEl) thumbEl.src = `https://img.youtube.com/vi/${videoId}/mqdefault.jpg`;
-      if (titleEl) titleEl.textContent = title || 'YouTube Video';
-      if (durEl && duration > 0) durEl.textContent = formatDur(duration);
-      prevEl?.classList.add('show');
+    // Populate the input field so the receiver can see + optionally change the link
+    const ytInput = document.getElementById('yt-url-input');
+    if (ytInput) ytInput.value = `https://www.youtube.com/watch?v=${videoId}`;
+    document.getElementById('yt-clear-btn')?.classList.add('show');
 
-      // Store state — player will be initialized at countdown/watch-screen time
-      ytVideoId  = videoId;
-      ytDuration = duration || ytDuration || 0;
-      ytCurrentTime = 0;
+    // Show friend's video in the friend card preview
+    updateFriendYtPreview(videoId, title);
 
-      showToast(`${getPeerDisplayName()} shared: ${title || videoId}`, 'info');
-      setSyncStatus(`Video loaded — mark ready when set 🍿`, 'ok');
+    // Show own preview card immediately using thumbnail URL (no oEmbed needed)
+    const prevEl  = document.getElementById('yt-preview');
+    const thumbEl = document.getElementById('yt-thumb');
+    const titleEl = document.getElementById('yt-title');
+    const durEl   = document.getElementById('yt-dur');
+    if (thumbEl) thumbEl.src = `https://img.youtube.com/vi/${videoId}/mqdefault.jpg`;
+    if (titleEl) titleEl.textContent = title || 'YouTube Video';
+    if (durEl && duration > 0) durEl.textContent = formatDur(duration);
+    prevEl?.classList.add('show');
 
-      // Kick off background player init (non-blocking — don't await).
-      // We pre-warm the IFrame API so it's ready when the watch screen opens.
-      if (videoId !== (ytPlayer?.videoId)) {
-        loadYouTubeAPI()
-          .then(() => initYtPlayer(videoId))
-          .catch(err => console.warn('[YT] background init failed:', err));
-      }
+    // Store state — player will be initialized at countdown/watch-screen time
+    ytVideoId  = videoId;
+    ytDuration = duration || ytDuration || 0;
+    ytCurrentTime = 0;
 
-      // Report duration to trigger server's duration_check (enables both ready btns)
-      if (ytDuration > 0) {
-        client?.fileReady(ytDuration, title || videoId);
-        resetReadyState({ disable: true });
-      }
+    showToast(`${getPeerDisplayName()} shared: ${title || videoId}`, 'info');
+    setSyncStatus(`Loading video — ready to watch together 🍿`, 'idle');
+
+    // Kick off background player init so it's warm when the watch screen opens.
+    // This also gives us the real duration to report back to the server for
+    // duration_check. We do a single init call and report fileReady on success.
+    // On error we stay silent — the error belongs to the sender, not us.
+    // If the sender passed a duration already, report it immediately (fast path)
+    // so the ready button can unlock without waiting for the player.
+    if (ytDuration > 0) {
+      client?.fileReady(ytDuration, title || videoId);
     }
-    // Don't call client.setReady(false) here — we want the ready button to stay enabled
+    loadYouTubeAPI()
+      .then(() => initYtPlayer(videoId))
+      .then(() => {
+        // Player init succeeded — report actual duration if we didn't already,
+        // or if it differs from what the sender gave us.
+        if (ytDuration > 0) client?.fileReady(ytDuration, title || videoId);
+      })
+      .catch(err => {
+        // Background init failed (e.g. embedding disabled). Stay silent — this
+        // error will be shown to the sender by their own processYtUrl catch block.
+        console.warn('[YT] receiver background init failed (silent):', err.message);
+        // Clear our state so we don't show a stale preview or enable ready.
+        ytVideoId = null;
+        const prevEl = document.getElementById('yt-preview');
+        prevEl?.classList.remove('show');
+        setSyncStatus('This video cannot be played — ask your friend to try a different one.', 'warn');
+        showToast('This video cannot be embedded. Ask your friend to try a different one.', 'warn');
+      });
   });
 
   // ── Playback sync ────────────────────────────────────────────────────────
@@ -1881,10 +1917,31 @@ function loadYouTubeAPI() {
 }
 
 // ── YouTube player creation / reuse ───────────────────────────────────────
+// Wrapped in a mutex (ytPlayerInitPromise) so concurrent calls from
+// peer_youtube_link background-init and countdown_start don't create two
+// YT.Player instances or call cueVideoById on a half-built object.
 async function initYtPlayer(videoId) {
+  // If an init is already in progress for this exact video, just await it
+  if (ytPlayerInitPromise) {
+    try { await ytPlayerInitPromise; } catch {}
+    // After the previous init, if the player is ready and already has this
+    // video loaded, nothing more to do.
+    if (ytPlayer && ytPlayerReady && ytVideoId === videoId) return;
+  }
+
+  ytPlayerInitPromise = _doInitYtPlayer(videoId);
+  try {
+    await ytPlayerInitPromise;
+  } finally {
+    ytPlayerInitPromise = null;
+  }
+}
+
+async function _doInitYtPlayer(videoId) {
   await loadYouTubeAPI();
-  if (ytPlayer && ytPlayerReady) {
-    // Reuse existing player — just load new video
+
+  // Reuse path: player exists, is ready, and its methods are real
+  if (ytPlayer && ytPlayerReady && typeof ytPlayer.cueVideoById === 'function') {
     ytPlayer.cueVideoById({ videoId }); // cue first so onError fires before play
     ytVideoId     = videoId;
     ytCurrentTime = 0;
@@ -1894,7 +1951,7 @@ async function initYtPlayer(videoId) {
     let attempts = 0;
     await new Promise(res => {
       const poll = setInterval(() => {
-        const d = ytPlayer.getDuration?.() ?? 0;
+        const d = typeof ytPlayer.getDuration === 'function' ? ytPlayer.getDuration() : 0;
         const errored = ytVideoId === null; // onError cleared it
         if (d > 0 || errored || ++attempts > 25) { clearInterval(poll); ytDuration = d; res(); }
       }, 200);
@@ -1902,7 +1959,22 @@ async function initYtPlayer(videoId) {
     if (ytVideoId === null) throw new Error('Video has embedding disabled or is unavailable.');
     return;
   }
-  // First-time player creation
+
+  // Destroy any zombie player object before creating a new one
+  if (ytPlayer) {
+    ytPlayerReady = false;
+    try { if (typeof ytPlayer.destroy === 'function') ytPlayer.destroy(); } catch {}
+    ytPlayer = null;
+    // Re-create the placeholder div that YT.Player replaces
+    const wrap = document.getElementById('yt-player-wrap');
+    if (wrap && !document.getElementById('yt-player')) {
+      const div = document.createElement('div');
+      div.id = 'yt-player';
+      wrap.appendChild(div);
+    }
+  }
+
+  // First-time (or post-destroy) player creation
   return new Promise((resolve, reject) => {
     ytPlayerReady = false;
     ytPlayer = new window.YT.Player('yt-player', {
@@ -1922,22 +1994,22 @@ async function initYtPlayer(videoId) {
         onReady(e) {
           ytPlayerReady = true;
           ytVideoId     = videoId;
-          ytDuration    = e.target.getDuration?.() ?? 0;
+          ytDuration    = typeof e.target.getDuration === 'function' ? e.target.getDuration() : 0;
           startYtPolling();
           resolve();
         },
         onStateChange(e) { onYtStateChange(e.data); },
         onError(e) {
           console.error('[YT] Player error code:', e.data);
-          // Error codes: 2=bad videoId, 5=HTML5 error, 100=not found/private,
-          // 101/150=embedding disabled by uploader (most common restriction)
           const msg = (e.data === 101 || e.data === 150)
             ? 'This video has embedding disabled by the uploader. Try a different video.'
             : (e.data === 100)
             ? 'Video not found or set to private.'
             : `YouTube player error (code ${e.data})`;
-          showToast(msg, 'warn');
-          setSyncStatus(msg, 'warn');
+          // Do NOT show toast/status here — the caller (processYtUrl or background
+          // pre-warm) decides whether to surface the error. Showing it here would
+          // display the message on the receiver's screen when the error actually
+          // belongs to the sender who pasted the link.
           ytVideoId = null;
           ytPlayerReady = false;
           resetReadyState({ disable: true });
@@ -2186,7 +2258,13 @@ async function processYtUrl(videoId, { broadcast = true } = {}) {
     console.error('[YT] processYtUrl failed:', err);
     loadEl?.classList.remove('show');
     prevEl?.classList.remove('show');
-    showToast(err.message || 'Could not load YouTube video', 'warn');
+    // Only show the error to the person who actually pasted the link (broadcast=true).
+    // The receiver's background pre-warm runs with broadcast=false — silently failing
+    // there is correct because the error belongs to the sender, not the receiver.
+    if (broadcast) {
+      showToast(err.message || 'Could not load YouTube video', 'warn');
+      setSyncStatus(err.message || 'Could not load YouTube video', 'warn');
+    }
     ytVideoId = null;
   }
 }
