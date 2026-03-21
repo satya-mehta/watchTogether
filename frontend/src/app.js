@@ -1135,11 +1135,14 @@ function wireClientEvents() {
   });
 
   client.on('countdown_start', ({ positionSec, serverTs }) => {
-    // Calculate how many seconds are left in the countdown based on network
-    // latency. If serverTs is missing (old backend), default to 3.
-    const elapsedSec = serverTs ? (Date.now() - serverTs) / 1000 : 0;
-    const startFrom  = Math.max(1, 3 - elapsedSec); // never go below 1
+    // Compute how many countdown seconds remain based on when server fired this.
+    // Peers receive it at slightly different times; startFrom corrects for that so
+    // both enter the watch screen at the same real-world moment.
+    const elapsedSec = serverTs ? Math.max(0, (Date.now() - serverTs) / 1000) : 0;
+    const startFrom  = Math.max(1, 3 - elapsedSec);
 
+    // Seek immediately — no async wait. An 8s await caused HOST and GUEST to start
+    // their countdowns seconds apart, landing on the watch screen at different times.
     if (roomMode === 'youtube') {
       if (ytPlayer && ytPlayerReady) ytPlayer.seekTo(positionSec, true);
       ytCurrentTime = positionSec;
@@ -1151,7 +1154,7 @@ function wireClientEvents() {
       showWatchScreen();
       showCallUI(!!call);
       if (roomMode === 'youtube') {
-        // Countdown overlay provides the user gesture autoplay needs.
+        // Countdown overlay click is the user gesture autoplay needs.
         // Retry every 500ms up to 4s in case player is still loading.
         const tryPlay = (attempts = 0) => {
           if (ytPlayer && ytPlayerReady) {
@@ -1180,44 +1183,73 @@ function wireClientEvents() {
   // ── YouTube room-level events ──────────────────────────────────────────
   client.on('peer_mode_change', ({ peerId, name, mode }) => {
     if (mode === roomMode) return; // already in sync
-    setRoomModeUI(mode, false);   // apply without re-broadcasting
+
+    // Auto-switch our own mode to match the friend's (sendWs=false = no re-broadcast)
+    setRoomModeUI(mode, false);
+    updateFriendCardForMode(mode);
+    resetReadyState({ disable: true });
+
     if (mode === 'youtube') {
       clearYtVideoSelection();
-      updateFriendCardForMode('youtube');
-      setSyncStatus(`${name || 'Your friend'} switched to YouTube mode — paste the same link`, 'idle');
-      showToast(`${name || 'Your friend'} switched to YouTube mode`);
+      // Show notice both as toast AND as sync status so it's impossible to miss
+      const msg = `${name || 'Your friend'} switched to YouTube mode`;
+      showToast(msg, 'info');
+      setSyncStatus(`📺 ${name || 'Your friend'} switched to YouTube — paste a link to start`, 'idle');
     } else {
-      updateFriendCardForMode('local');
-      setSyncStatus('Your friend switched back to local file mode', 'idle');
-      showToast(`${name || 'Your friend'} switched to local file mode`);
+      const msg = `${name || 'Your friend'} switched to local file mode`;
+      showToast(msg, 'info');
+      setSyncStatus(`📁 ${name || 'Your friend'} switched to local file — pick your video`, 'idle');
     }
-    resetReadyState({ disable: true });
   });
 
-  client.on('peer_youtube_link', async ({ fromPeerId, videoId, title }) => {
+  client.on('peer_youtube_link', async ({ fromPeerId, videoId, title, duration }) => {
     if (!videoId) return;
     const isMine = fromPeerId === client.peerId;
     if (!isMine) {
-      // Switch receiver to YouTube mode if not already there
-      if (roomMode !== 'youtube') {
-        setRoomModeUI('youtube', false); // don't re-broadcast the mode change
-      }
-      // Populate the input so the receiver can see and optionally change the link
+      // Auto-switch to YouTube mode if we're not already there (no re-broadcast)
+      if (roomMode !== 'youtube') setRoomModeUI('youtube', false);
+
+      // Populate the input field so the receiver can see + optionally change the link
       const ytInput = document.getElementById('yt-url-input');
       if (ytInput) ytInput.value = `https://www.youtube.com/watch?v=${videoId}`;
       document.getElementById('yt-clear-btn')?.classList.add('show');
+
+      // Show friend's video in the friend card preview
       updateFriendYtPreview(videoId, title);
-      setSyncStatus(`${getPeerDisplayName()} shared a YouTube video — loading…`, 'idle');
+
+      // Show own preview card immediately using thumbnail URL (no oEmbed needed)
+      const prevEl  = document.getElementById('yt-preview');
+      const thumbEl = document.getElementById('yt-thumb');
+      const titleEl = document.getElementById('yt-title');
+      const durEl   = document.getElementById('yt-dur');
+      if (thumbEl) thumbEl.src = `https://img.youtube.com/vi/${videoId}/mqdefault.jpg`;
+      if (titleEl) titleEl.textContent = title || 'YouTube Video';
+      if (durEl && duration > 0) durEl.textContent = formatDur(duration);
+      prevEl?.classList.add('show');
+
+      // Store state — player will be initialized at countdown/watch-screen time
+      ytVideoId  = videoId;
+      ytDuration = duration || ytDuration || 0;
+      ytCurrentTime = 0;
+
       showToast(`${getPeerDisplayName()} shared: ${title || videoId}`, 'info');
-      if (videoId !== ytVideoId) {
-        // broadcast:false so the receiver doesn't echo the link back, which would
-        // trigger a spurious peer_youtube_link on the sender and reset their ready state
-        await processYtUrl(videoId, { broadcast: false })
-          .catch(err => console.warn('[YT] auto-load failed:', err));
+      setSyncStatus(`Video loaded — mark ready when set 🍿`, 'ok');
+
+      // Kick off background player init (non-blocking — don't await).
+      // We pre-warm the IFrame API so it's ready when the watch screen opens.
+      if (videoId !== (ytPlayer?.videoId)) {
+        loadYouTubeAPI()
+          .then(() => initYtPlayer(videoId))
+          .catch(err => console.warn('[YT] background init failed:', err));
+      }
+
+      // Report duration to trigger server's duration_check (enables both ready btns)
+      if (ytDuration > 0) {
+        client?.fileReady(ytDuration, title || videoId);
+        resetReadyState({ disable: true });
       }
     }
-    resetReadyState({ disable: true });
-    client?.setReady(false);
+    // Don't call client.setReady(false) here — we want the ready button to stay enabled
   });
 
   // ── Playback sync ────────────────────────────────────────────────────────
@@ -1768,8 +1800,9 @@ function updatePeerReadyState(peerId, isReady) {
 
 let countdownTimer = null;
 function startCountdown(onDone, startFrom = 3) {
-  // Clear any existing countdown first — prevents two overlapping intervals
-  // which caused one user to enter the watch screen 3-4s after the other.
+  // Always clear any existing countdown first — a duplicate countdown_start
+  // would spawn two overlapping intervals, causing one peer to enter the watch
+  // screen 3-4 seconds after the other (old interval fires onDone a second time).
   clearInterval(countdownTimer);
   countdownTimer = null;
 
@@ -2009,10 +2042,10 @@ function setRoomModeUI(mode, sendWs = true) {
   }
 
   resetReadyState({ disable: true });
-  // Only notify the server of ready/mode state when we're the one initiating
-  // the change (sendWs=true). Internal calls like peer_mode_change reflection
-  // and leaveWatchToLobby must NOT send ready_toggle — that's what caused the
-  // "peer_ready isReady:false" spam and mid-countdown ready-state corruption.
+  // Only broadcast ready-state reset when WE initiated the switch (sendWs=true).
+  // Internal/peer-triggered calls use sendWs=false — calling setReady unconditionally
+  // here caused repeated 'peer_ready isReady:false' spam that overwrote toasts and
+  // corrupted ready state mid-countdown.
   if (sendWs && client) {
     client.setReady(false);
     client._send('mode_change', { mode });
@@ -2141,7 +2174,7 @@ async function processYtUrl(videoId, { broadcast = true } = {}) {
 
     if (broadcast) {
       // Broadcast the link to the other peer (only when we are the originator)
-      client?._send('youtube_link', { videoId, title: info.title || 'YouTube Video' });
+      client?._send('youtube_link', { videoId, title: info.title || 'YouTube Video', duration: ytDuration });
       setSyncStatus('Waiting for your friend to load the same video', 'idle');
     } else {
       setSyncStatus('Video loaded — you can mark ready!', 'idle');

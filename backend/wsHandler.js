@@ -338,7 +338,8 @@ function handleConnection(ws, req, roomManager) {
       broadcast(myRoom, 'peer_youtube_link', {
         fromPeerId: myPeerId,
         videoId:    msg.videoId,
-        title:      msg.title || null,
+        title:      msg.title    || null,
+        duration:   msg.duration || null, // pass through so receiver skips initYtPlayer
       });
       console.log(`[YouTube] ${myRoom.code} link: ${msg.videoId} by ${peer?.name}`);
       return;
