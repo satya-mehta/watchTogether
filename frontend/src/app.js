@@ -1259,21 +1259,22 @@ function wireClientEvents() {
     showToast(`${getPeerDisplayName()} shared: ${title || videoId}`, 'info');
     setSyncStatus(`Loading video — ready to watch together 🍿`, 'idle');
 
-    // Kick off background player init so it's warm when the watch screen opens.
-    // This also gives us the real duration to report back to the server for
-    // duration_check. We do a single init call and report fileReady on success.
-    // On error we stay silent — the error belongs to the sender, not us.
-    // If the sender passed a duration already, report it immediately (fast path)
-    // so the ready button can unlock without waiting for the player.
+    // Report our duration to the server exactly ONCE using whatever we have.
+    // The sender always passes their confirmed duration in the broadcast, so
+    // use that immediately — it's the ground truth. Do NOT re-report after
+    // player init; that second call was causing a race where the player briefly
+    // reports a different duration before settling, producing a false mismatch.
     if (ytDuration > 0) {
       client?.fileReady(ytDuration, title || videoId);
     }
+
+    // Kick off background player init so it's warm when the watch screen opens.
+    // Errors are silent here — the sender surfaces them on their own screen.
     loadYouTubeAPI()
       .then(() => initYtPlayer(videoId))
       .then(() => {
-        // Player init succeeded — report actual duration if we didn't already,
-        // or if it differs from what the sender gave us.
-        if (ytDuration > 0) client?.fileReady(ytDuration, title || videoId);
+        // Init succeeded. Duration already reported above — don't call fileReady again.
+        setSyncStatus('Video loaded — mark ready when set 🍿', 'ok');
       })
       .catch(err => {
         // Background init failed (e.g. embedding disabled). Stay silent — this
@@ -1315,6 +1316,24 @@ function wireClientEvents() {
   // ── Reactions ─────────────────────────────────────────────────────────
   client.on('reaction', ({ emoji }) => {
     spawnFloatingReaction(emoji);
+  });
+
+  // ── Fatal server errors ───────────────────────────────────────────────
+  // Room full / not found after a reconnect means the room was destroyed
+  // while we were offline (Render free tier killed the backend). Boot the
+  // user back to the landing screen with a clear explanation.
+  client.on('error', ({ message }) => {
+    if (message === 'Room full' || message === 'Room not found') {
+      // Small delay so the WS close event fires and _shouldReconnect is
+      // already false before we tear down app state.
+      setTimeout(() => {
+        leaveRoomAndGoHome(
+          message === 'Room full'
+            ? 'The room is full. Your session may have expired — create a new room.'
+            : 'The room has expired. Please create a new room and share the link again.'
+        );
+      }, 300);
+    }
   });
 }
 
@@ -2188,25 +2207,38 @@ function wireYouTubeLobby() {
   });
 
   let ytDebounce = null;
+  let ytLastProcessedId = null; // dedup — prevents paste + input both firing processYtUrl
+
+  const maybeProcessYtUrl = (id) => {
+    if (!id || id === ytLastProcessedId) return;
+    ytLastProcessedId = id;
+    // Reset after 2s so the same link can be re-pasted intentionally after clearing
+    setTimeout(() => { if (ytLastProcessedId === id) ytLastProcessedId = null; }, 2000);
+    processYtUrl(id);
+  };
+
   ytInput?.addEventListener('input', () => {
     const val = ytInput.value.trim();
     ytClear?.classList.toggle('show', val.length > 0);
     clearTimeout(ytDebounce);
     if (!val) {
+      ytLastProcessedId = null;
       document.getElementById('yt-preview')?.classList.remove('show');
       document.getElementById('yt-loading')?.classList.remove('show');
       return;
     }
     const id = parseYouTubeId(val);
     if (!id) return;
-    ytDebounce = setTimeout(() => processYtUrl(id), 700);
+    ytDebounce = setTimeout(() => maybeProcessYtUrl(id), 700);
   });
 
   ytInput?.addEventListener('paste', e => {
-    // Run after the paste has updated the input value
+    // Run after the paste has updated the input value.
+    // cancelDebounce so the 700ms input debounce doesn't also fire.
+    clearTimeout(ytDebounce);
     setTimeout(() => {
       const id = parseYouTubeId(e.target.value || '');
-      if (id) processYtUrl(id);
+      if (id) maybeProcessYtUrl(id);
     }, 60);
   });
 

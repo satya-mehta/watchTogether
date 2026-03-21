@@ -271,6 +271,14 @@ class WatchTogetherClient extends EventTarget {
 
       case 'error':
         console.error('[WT] Server error:', rest.message);
+        // If the server says the room is full or gone, continuing to reconnect
+        // and re-join will never succeed — it just floods the server with
+        // failing join attempts (the "Not in a room" spam in the logs).
+        // Stop the reconnect loop and let the UI handle it gracefully.
+        if (rest.message === 'Room full' || rest.message === 'Room not found') {
+          this._shouldReconnect = false;
+          this.roomCode = null;
+        }
         this._emit('error', rest);
         break;
     }

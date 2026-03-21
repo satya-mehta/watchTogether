@@ -23,13 +23,18 @@ function generateCode() {
 //  PeerState = { ws, peerId, name, fileDuration, isReady, isHost }
 //  PlayState = { playing, positionSec, lastUpdatedAt, masterId }
 
+// How long an empty room is kept alive before GC removes it (10 minutes).
+// This window lets both peers reconnect after a WS drop without losing
+// their room code.
+const EMPTY_ROOM_TTL_MS = 10 * 60 * 1000;
+
 class RoomManager {
   constructor() {
     this.rooms = new Map();     // roomId → room
     this.codeIndex = new Map(); // code   → roomId
 
-    // Clean up empty rooms every 10 minutes
-    setInterval(() => this._gc(), 10 * 60 * 1000);
+    // Run GC every minute so empty rooms are collected promptly after their TTL
+    setInterval(() => this._gc(), 60 * 1000);
   }
 
   // ── Create ───────────────────────────────────────────────────────────────
@@ -75,6 +80,8 @@ class RoomManager {
       isReady: false,
     });
     if (room.peers.size === 1) room.playState.masterId = peerId;
+    // Clear the empty-room timer — someone joined, room is active again
+    room.emptyAt = null;
     console.log(`[Room] ${room.code}  +peer ${name} (${peerId})  total=${room.peers.size}`);
   }
 
@@ -88,9 +95,12 @@ class RoomManager {
     }
 
     if (room.peers.size === 0) {
-      this.rooms.delete(room.id);
-      this.codeIndex.delete(room.code);
-      console.log(`[Room] ${room.code}  destroyed (empty)`);
+      // Don't destroy immediately — record when the room became empty and let
+      // the GC clean it up after EMPTY_ROOM_TTL_MS. This gives both peers time
+      // to reconnect after a WS drop (Render free tier, mobile networks, etc.)
+      // without losing their room code.
+      room.emptyAt = Date.now();
+      console.log(`[Room] ${room.code}  empty — will expire in ${EMPTY_ROOM_TTL_MS / 60000} min`);
     }
   }
 
@@ -140,11 +150,12 @@ class RoomManager {
   _gc() {
     const now = Date.now();
     this.rooms.forEach((room, id) => {
-      const age = (now - room.createdAt) / 1000 / 60;
-      if (room.peers.size === 0 && age > 30) {
+      // Only collect rooms that are empty AND have been empty longer than the TTL.
+      // Rooms with peers are never collected here regardless of age.
+      if (room.peers.size === 0 && room.emptyAt && (now - room.emptyAt) >= EMPTY_ROOM_TTL_MS) {
         this.rooms.delete(id);
         this.codeIndex.delete(room.code);
-        console.log(`[GC] Removed stale room ${room.code}`);
+        console.log(`[GC] Removed expired empty room ${room.code} (empty for ${Math.round((now - room.emptyAt) / 60000)} min)`);
       }
     });
   }
