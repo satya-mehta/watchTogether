@@ -627,7 +627,13 @@ input[type=range]#seek-bar::-webkit-slider-thumb{appearance:none;width:14px;heig
   <button class="watch-back" id="watch-back-btn" type="button">← Change file</button>
 
   <!-- Actual movie -->
-  <video id="movie-video" preload="metadata"></video>
+  <!-- controlsList and disablePictureInPicture block browser-native transport
+       controls (Safari fullscreen overlay, AirPlay, PiP) so all play/pause
+       goes through our own button, which has proper sync logic. -->
+  <video id="movie-video" preload="metadata"
+    controlsList="nodownload nofullscreen noremoteplayback"
+    disablepictureinpicture
+    disableremoteplayback></video>
   <!-- YouTube player (active in youtube mode) -->
   <div id="yt-player-wrap">
     <div id="yt-player"></div>

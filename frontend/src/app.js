@@ -106,7 +106,11 @@ let lastRenderedFrameAt = 0;
 let lastFreezeRecoveryAt = 0;
 let freezeRecoveryCount = 0;
 let lastSentPlayPauseCommand = null;
-let syncEngineActing = false; // true while sync engine is calling play/pause — suppresses native event re-broadcast
+// Timestamp of the last play_pause command we RECEIVED from the server (not sent).
+// Native play/pause events that fire within a short window after receiving a
+// command are the sync engine echoing back — we suppress them to break the loop.
+let lastReceivedPlayPauseAt = 0;
+const RECEIVED_COMMAND_SUPPRESS_MS = 2000; // suppress native events for 2s after receiving OR sending a command
 let trackRefreshFrame = null;
 let trackRefreshTimeout = null;
 let localSubtitleTrackEl = null;
@@ -581,23 +585,22 @@ function sendPlayPauseCommand(playing, positionSec) {
     return;
   }
   lastSentPlayPauseCommand = { playing, positionSec: targetPos, at: now };
+  // Stamp lastReceivedPlayPauseAt on the SENDER side too.
+  // When this command reaches the other peer and they apply it, their video
+  // fires a play/pause event which they send back. That echo arrives at the
+  // master and the master's video fires an event — suppressing it here prevents
+  // the master from re-broadcasting and sustaining the loop.
+  lastReceivedPlayPauseAt = now;
   client?.playPause(playing, targetPos);
 }
 
 async function ensureMoviePlaying({ source = 'sync', showHint = false } = {}) {
   if (roomMode === 'youtube') {
-    if (ytPlayer && ytPlayerReady) {
-      syncEngineActing = true;
-      ytPlayer.playVideo();
-      ytIsPaused = false;
-      // Reset after a tick so onYtStateChange suppression covers the event
-      setTimeout(() => { syncEngineActing = false; }, 200);
-    }
+    if (ytPlayer && ytPlayerReady) { ytPlayer.playVideo(); ytIsPaused = false; }
     return true;
   }
   if (movieVideo.paused) {
     try {
-      syncEngineActing = true;
       await movieVideo.play();
       playbackRetryPending = false;
       markPlaybackProgress();
@@ -610,8 +613,6 @@ async function ensureMoviePlaying({ source = 'sync', showHint = false } = {}) {
         showToast('Tap play if your browser paused the video', 'info');
       }
       return false;
-    } finally {
-      syncEngineActing = false;
     }
   }
   playbackRetryPending = false;
@@ -680,14 +681,11 @@ function applyHardSync({ targetPos, playing, announce = false, driftSec = 0 }) {
   if (playing && !shouldPauseAtEnd) {
     ensureMoviePlaying({ source: 'hard-sync', showHint: true });
   } else {
-    syncEngineActing = true;
     if (roomMode === 'youtube') {
       if (ytPlayer && typeof ytPlayer.pauseVideo === 'function') { ytPlayer.pauseVideo(); }
       ytIsPaused = true;
-      setTimeout(() => { syncEngineActing = false; }, 200);
     } else {
       movieVideo.pause();
-      syncEngineActing = false;
     }
   }
 }
@@ -727,14 +725,11 @@ async function handleSyncCorrection({ positionSec, playing, serverTs, drift, sou
     }
     const isPaused = roomMode === 'youtube' ? ytIsPaused : movieVideo.paused;
     if (!isPaused) {
-      syncEngineActing = true;
       if (roomMode === 'youtube') {
         if (ytPlayer && typeof ytPlayer.pauseVideo === 'function') { ytPlayer.pauseVideo(); }
         ytIsPaused = true;
-        setTimeout(() => { syncEngineActing = false; }, 200);
       } else {
         movieVideo.pause();
-        syncEngineActing = false;
       }
     }
     return;
@@ -1317,6 +1312,9 @@ function wireClientEvents() {
 
   // A play/pause command relayed from the master peer
   client.on('play_pause', async ({ playing, positionSec, serverTs }) => {
+    // Stamp the time so native play/pause events that fire as a result of
+    // applying this command are suppressed and not re-broadcast to the server.
+    lastReceivedPlayPauseAt = Date.now();
     try {
       await handleSyncCorrection({ positionSec, playing, serverTs, source: 'command' });
     } catch (e) {
@@ -1330,6 +1328,7 @@ function wireClientEvents() {
   });
 
   client.on('sync_nudge', async ({ positionSec, playing, serverTs, drift }) => {
+    lastReceivedPlayPauseAt = Date.now();
     try {
       await handleSyncCorrection({ positionSec, playing, serverTs, drift, source: 'sync' });
     } catch (e) {
@@ -1561,19 +1560,20 @@ function wireVideoControls() {
       showToast('Tap play to resume', 'info');
     }
     // Native controls (Safari, fullscreen overlay, OS media keys) fire 'pause'
-    // without going through our play/pause button. Treat this exactly like a
-    // button press so the other peer stays in sync.
-    // syncEngineActing suppresses the broadcast when the sync engine itself
-    // triggered the pause — preventing the ping-pong loop where applying a
-    // received play_pause command causes a new play_pause to be sent back.
-    if (isWatchScreenActive() && peerPresent && !isAtVideoEnd() && !syncEngineActing) {
+    // without going through our custom button.
+    // Suppress if we recently received a play_pause command from the server —
+    // that command caused this event by calling movieVideo.pause() internally,
+    // and re-broadcasting it would create a ping-pong loop.
+    const isEchoFromSync = (Date.now() - lastReceivedPlayPauseAt) < RECEIVED_COMMAND_SUPPRESS_MS;
+    if (isWatchScreenActive() && peerPresent && !isAtVideoEnd() && !isEchoFromSync) {
       sendPlayPauseCommand(false, movieVideo.currentTime);
     }
   });
 
   movieVideo.addEventListener('play', () => {
-    // Guard with syncEngineActing for the same reason as 'pause' above.
-    if (isWatchScreenActive() && peerPresent && !syncEngineActing) {
+    // Same suppression logic as 'pause' above.
+    const isEchoFromSync = (Date.now() - lastReceivedPlayPauseAt) < RECEIVED_COMMAND_SUPPRESS_MS;
+    if (isWatchScreenActive() && peerPresent && !isEchoFromSync) {
       sendPlayPauseCommand(true, movieVideo.currentTime);
     }
   });
@@ -2131,9 +2131,10 @@ function onYtStateChange(state) {
   // State 1 = playing, state 2 = paused.
   // These can be triggered by YouTube's own overlay controls without going
   // through our custom play/pause button. Broadcast so the peer stays in sync.
-  // syncEngineActing suppresses the broadcast when the sync engine triggered
-  // the state change — same ping-pong prevention as the local file listeners.
-  if (!isWatchScreenActive() || !peerPresent || syncEngineActing) return;
+  // Suppress if we recently received a command from the server — that command
+  // caused this state change, and re-broadcasting would create a loop.
+  const isEchoFromSync = (Date.now() - lastReceivedPlayPauseAt) < RECEIVED_COMMAND_SUPPRESS_MS;
+  if (!isWatchScreenActive() || !peerPresent || isEchoFromSync) return;
   if (state === 1) {
     sendPlayPauseCommand(true, ytCurrentTime);
   } else if (state === 2) {
