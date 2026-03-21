@@ -1,8 +1,8 @@
 # Watch Together
 
-Real-time watch party app for syncing local video playback between two people, with lobby readiness, reactions, shareable room links, and a peer-to-peer WebRTC video call.
+Real-time watch party app for syncing playback between two people — works with both **local video files** and **YouTube videos**. Includes lobby readiness, emoji reactions, shareable room links, and a peer-to-peer WebRTC video call.
 
-The project is split into a static frontend and a separate Node/WebSocket backend so you can deploy the UI to Vercel and the server to Render.
+The project is split into a static frontend and a separate Node/WebSocket backend so you can deploy the UI to Netlify/Vercel and the server to Render.
 
 ## Screenshots
 
@@ -27,7 +27,7 @@ npm start
 
 Frontend:
 
-- Open `frontend/index.html` locally with a static server, or deploy `frontend/` to Vercel.
+- Open `frontend/index.html` locally with a static server, or deploy `frontend/` to Vercel or other.
 - Point `frontend/config.js` at your deployed backend URL when frontend and backend are on different domains.
 
 - Backend URL: `http://localhost:3001`
@@ -68,7 +68,7 @@ The frontend will automatically convert the HTTP URL to WebSocket (`ws://` or `w
 ### Live App
 
 The app is deployed and running live:
-- **Frontend**: https://watchtogetherlive.netlify.com
+- **Frontend**: https://watchtogetherlive.netlify.app
 - **Backend**: Deployed on Render (configured in frontend/config.js)
 
 ### Local Development
@@ -81,52 +81,61 @@ cd backend
 npm install
 npm run dev
 
-# Terminal 2 - Frontend (if using a static server)
+# Terminal 2 - Frontend
 cd frontend
 npx http-server -p 3000
-# or use your favorite static server
 ```
 
-Then open `http://localhost:3000` in your browser and point the config to `http://localhost:3001`.
+Then open `http://localhost:3000` and point `config.js` to `http://localhost:3001`.
 
 ## How it works
 
+### Local file mode (default)
+
 1. Create a room and share the generated room code or room link.
 2. Both people join the same room.
-3. Each person picks the same local video file.
-4. The server compares file durations to catch mismatches.
-5. Once both people mark ready, the app starts a countdown.
+3. Each person picks the same local video file from their own device — nothing is uploaded.
+4. The server compares file durations to confirm both sides picked the same movie.
+5. Once both people mark ready, the app starts a synchronised countdown.
 6. Play, pause, seek, react, and video chat in sync.
+
+### YouTube mode
+
+1. Either person clicks the **YouTube** toggle in their player card. The other peer's UI automatically mirrors the switch — no action needed on their side.
+2. Either person pastes a YouTube link. The video title and thumbnail appear immediately, and the link is broadcast to the other peer automatically — they see the same preview without pasting anything themselves.
+3. The server confirms both sides have loaded the same video duration.
+4. Both people mark ready and the synchronised countdown begins. The YouTube player starts on both sides at the same moment.
+5. Play, pause, and seek controls stay in sync exactly like local file mode.
+
+> **Note on embedding:** YouTube videos with embedding disabled by the uploader (common for music videos and major studio trailers) will show a "Watch on YouTube" error. The app detects this (error codes 101/150) and displays a clear message. Use a different video in that case.
 
 ## Architecture
 
 ```text
-Browser A (Vercel)        Render backend              Browser B (Vercel)
+Browser A (vercel)       Render backend              Browser B (vercel)
      |                        |                             |
      |── POST /api/rooms ────►|                             |
      |◄── { roomCode } ───────|                             |
      |                        |                             |
-     |── open /ROOM-CODE ────►|                             |
-     |                        |◄──── open /ROOM-CODE ──────|
+     |── WS join ────────────►|◄──── WS join ──────────────|
+     |◄── joined snapshot ────|──── joined snapshot ──────►|
      |                        |                             |
-     |── WS join ────────────►|                             |
-     |◄── joined snapshot ────|                             |
-     |                        |◄──── WS join ──────────────|
-     |◄── peer_joined ────────|                             |
-     |                        |──── joined snapshot ──────►|
+     |  ── LOCAL FILE MODE ──────────────────────────────── |
+     |── file_ready ─────────►|─── peer_file_ready ───────►|
+     |◄══ duration_check ═════|════ duration_check ════════►|
      |                        |                             |
-     |── file_ready ─────────►|                             |
-     |                        |─── peer_file_ready ───────►|
-     |◄══ duration_check ═════|════ duration_check ═══════►|
+     |  ── YOUTUBE MODE ─────────────────────────────────── |
+     |── mode_change ────────►|─── peer_mode_change ───────►|
+     |── youtube_link ───────►|─── peer_youtube_link ──────►|
+     |── file_ready ─────────►|─── peer_file_ready ───────►|
+     |◄══ duration_check ═════|════ duration_check ════════►|
      |                        |                             |
+     |  ── BOTH MODES ────────────────────────────────────  |
      |── ready_toggle ───────►|─── peer_ready ────────────►|
-     |◄══ countdown_start ════|════ countdown_start ══════►|
+     |◄══ countdown_start ════|════ countdown_start ═══════►|
      |                        |                             |
      |── play_pause / seek ──►|─── relay to peer ─────────►|
-     |                        |                             |
-     |── sync_check ─────────►|                             |
-     |◄── sync_nudge ─────────|                             |
-     |                        |                             |
+     |── sync_check ─────────►|◄── sync_nudge ─────────────|
      |── reaction ───────────►|─── reaction ──────────────►|
      |── webrtc_signal ──────►|─── webrtc_signal ─────────►|
 ```
@@ -136,12 +145,12 @@ Browser A (Vercel)        Render backend              Browser B (Vercel)
 ```text
 .
 ├── frontend/
-│   ├── config.js       # frontend -> backend URL config
+│   ├── config.js       # frontend → backend URL config
 │   ├── index.html      # frontend UI
 │   ├── vercel.json     # room-link rewrite to index.html
 │   ├── assets/
 │   └── src/
-│       ├── app.js      # browser app logic
+│       ├── app.js      # browser app logic (local file + YouTube)
 │       ├── client.js   # websocket client SDK
 │       └── webrtc.js   # peer-to-peer video call module
 └── backend/
@@ -167,73 +176,63 @@ Browser A (Vercel)        Render backend              Browser B (Vercel)
 | Type | Payload fields | Description |
 |------|----------------|-------------|
 | `join` | `roomCode, name, isHost` | Join an existing room |
-| `file_ready` | `durationSec, fileName` | Report the selected local file |
+| `file_ready` | `durationSec, fileName` | Report a local file duration or YouTube video duration |
 | `ready_toggle` | `isReady` | Toggle ready state in the lobby |
 | `play_pause` | `playing, positionSec, timestamp` | Send play/pause command |
 | `seek` | `positionSec` | Send seek command |
 | `sync_check` | `positionSec` | Ask the server to compare drift |
 | `reaction` | `emoji` | Send an emoji reaction |
 | `webrtc_signal` | `signal` | Relay SDP/ICE data for WebRTC |
-| `return_to_lobby` | none | Return both users to the file-pick lobby |
+| `return_to_lobby` | none | Return both users to the lobby |
+| `mode_change` | `mode` | Switch room between `'local'` and `'youtube'` mode |
+| `youtube_link` | `videoId, title, duration` | Share a YouTube video with the other peer |
 
 ### Server → Client
 
 | Type | Payload fields | Description |
 |------|----------------|-------------|
-| `joined` | `roomCode, peers, playState, masterId, yourPeerId` | Room snapshot after joining |
+| `joined` | `roomCode, peers, playState, masterId, yourPeerId, roomMode, youtubeVideoId, youtubeTitle` | Room snapshot after joining, includes current YouTube state for late joiners |
 | `peer_joined` | `peerId, name, isHost` | Another user joined |
 | `peer_left` | `peerId, name` | Another user disconnected |
-| `peer_file_ready` | `peerId, durationSec, fileName` | Peer selected a file |
+| `peer_file_ready` | `peerId, durationSec, fileName` | Peer selected a file or loaded a YouTube video |
 | `duration_check` | `match, diff, durations` | Duration comparison result |
 | `peer_ready` | `peerId, isReady` | Peer toggled readiness |
-| `countdown_start` | `positionSec` | Countdown before watch screen |
+| `countdown_start` | `positionSec, serverTs` | Countdown before watch screen. `serverTs` lets peers that receive the message late start from a lower count so both enter the watch screen at the same moment. |
 | `play_pause` | `playing, positionSec, masterId, serverTs` | Relayed playback command |
 | `seek` | `positionSec, masterId, serverTs` | Relayed seek command |
-| `sync_nudge` | `positionSec, drift, playing, serverTs, masterId` | Server-detected drift correction. The client SDK also fires this as `apply_sync` so UI code can hook into it without a separate event. |
+| `sync_nudge` | `positionSec, drift, playing, serverTs, masterId` | Server-detected drift correction |
 | `reaction` | `emoji, fromPeerId` | Relayed emoji reaction |
 | `webrtc_signal` | `signal, fromPeerId` | Relayed WebRTC signal |
 | `return_to_lobby` | `peerId, name` | Peer changed file / returned to lobby |
+| `peer_mode_change` | `peerId, name, mode` | A peer switched between local file and YouTube mode |
+| `peer_youtube_link` | `fromPeerId, videoId, title, duration` | A peer shared a YouTube video link. `duration` is included so the receiver can enable the ready button without needing to initialise the IFrame player first. |
 | `error` | `message` | Server-side error |
 
-## Frontend integration
+## YouTube integration details
 
-```js
-import { WatchTogetherClient } from './src/client.js';
+### Mode toggle
 
-const client = new WatchTogetherClient(
-  `${(window.WATCH_TOGETHER_CONFIG?.wsBaseUrl || location.origin).replace(/^http:/, 'ws:').replace(/^https:/, 'wss:')}/ws`
-);
+Each player card has a **File / YouTube** pill toggle. Clicking YouTube broadcasts `mode_change` to the server, which relays `peer_mode_change` to the other peer. Both UIs switch simultaneously — the local file panel slides out and the YouTube link input appears on both sides.
 
-await client.connect();
-client.join({ roomCode: 'COOL-1234', name: 'You', isHost: true });
+### Link sharing
 
-video.addEventListener('loadedmetadata', () => {
-  client.fileReady(video.duration, file.name);
-});
+Either person pastes a YouTube URL (supports `youtube.com/watch?v=`, `youtu.be/`, `/shorts/`, and `/embed/` formats). Once a valid ID is detected the app fetches the title and thumbnail via the YouTube oEmbed API (no API key required), then sends `youtube_link` to the server with the `videoId`, `title`, and `duration`. The server relays `peer_youtube_link` to the other peer, who sees the preview card populate immediately — no manual pasting needed. The IFrame player is pre-warmed in the background so it is ready when the watch screen opens.
 
-client.setPositionGetter(() => video.currentTime);
+### Duration matching
 
-client.on('play_pause', async ({ playing, positionSec, serverTs }) => {
-  const latencySec = (Date.now() - serverTs) / 1000;
-  video.currentTime = positionSec + (playing ? latencySec : 0);
-  if (playing) await video.play().catch(() => {});
-  else video.pause();
-});
+After both peers have the video, each side sends `file_ready` with the YouTube player's `getDuration()` value. The server runs the same tolerance check used for local files — if both sides report the same duration (within 2 seconds), both ready buttons are enabled.
 
-client.on('seek', ({ positionSec }) => {
-  video.currentTime = positionSec;
-});
+### Sync engine
 
-client.on('apply_sync', async ({ positionSec, playing }) => {
-  video.currentTime = positionSec;
-  if (playing) await video.play().catch(() => {});
-  else video.pause();
-});
+YouTube playback uses the same server-authoritative sync engine as local files. `sync_check` heartbeats send `ytPlayer.getCurrentTime()`, nudges call `ytPlayer.seekTo()`, and play/pause uses `ytPlayer.playVideo()` / `ytPlayer.pauseVideo()`. The polling interval is 250 ms, giving approximately 250 ms position accuracy (vs frame-accurate for local files).
 
-client.on('reaction', ({ emoji }) => {
-  showFloatingReaction(emoji);
-});
-```
+### Countdown alignment
+
+`countdown_start` includes `serverTs`. Each peer subtracts `(Date.now() - serverTs)` from the 3-second countdown, so a peer that receives the message one second late starts the countdown from `2` and both arrive at the watch screen at the same real-world instant.
+
+### Embedding restrictions
+
+YouTube controls which videos can be embedded in third-party sites. Videos blocked by the uploader trigger IFrame API error codes 101 or 150, and the player shows a "Watch on YouTube" message. The app detects these codes and displays a clear error toast. Most content from tutorial channels, TED, Kurzgesagt, Linus Tech Tips, and independent creators works fine.
 
 ## WebRTC video call
 
@@ -245,16 +244,12 @@ client.on('reaction', ({ emoji }) => {
 import { VideoCall } from './src/webrtc.js';
 
 const call = new VideoCall(client, localVideoEl, remoteVideoEl);
-
 await call.start(isHost);
 
-call.on('connected', () => {
-  console.log('P2P call live');
-});
-
-call.on('remote_stream', ({ stream }) => {
-  console.log('Remote stream ready', stream);
-});
+call.on('connected',        () => console.log('P2P call live'));
+call.on('remote_stream',    ({ stream }) => { /* stream attached */ });
+call.on('remote_camera_off', () => { /* show camera-off overlay */ });
+call.on('remote_camera_on',  () => { /* hide camera-off overlay */ });
 
 call.toggleMute();
 call.toggleCamera();
@@ -268,83 +263,110 @@ call.end();
 | `started` | `{ hasVideo, hasAudio }` |
 | `connected` | none |
 | `remote_stream` | `{ stream }` |
+| `remote_camera_off` | none — remote peer turned camera off |
+| `remote_camera_on` | none — remote peer turned camera back on |
 | `peer_disconnected` | none |
 | `mute_changed` | `{ muted }` |
 | `camera_changed` | `{ hidden }` |
 | `camera_unavailable` | none |
 | `media_unavailable` | none |
 | `ice_state` | `{ state }` |
+| `ice_failed` | none — gave up after max restart attempts |
 | `ended` | none |
 
 ### STUN / TURN
 
-The module now tries public STUN servers first and also includes Open Relay STUN/TURN entries for tougher NATs and stricter networks. For a more controlled production deployment, you may still want to replace those with your own TURN service in `frontend/src/webrtc.js`.
+The module tries public STUN servers first (Google, Cloudflare) then falls back to Open Relay STUN/TURN for stricter NATs. For production, replace the Open Relay credentials with your own TURN service in `frontend/src/webrtc.js`.
 
 ## Sync behavior
 
-- Either user can control playback.
-- The server keeps an authoritative `playState` and extrapolates the current position while playing. The extrapolated position is capped at the shortest file duration reported by either peer, so the server clock never runs past the end of the video.
-- The non-master peer sends a `sync_check` heartbeat every **1.5 seconds**. The master peer uses its heartbeat to keep the server clock accurate while playing.
+- Either user can control playback in both local file and YouTube modes.
+- The server keeps an authoritative `playState` and extrapolates the current position while playing. The extrapolated position is capped at the shortest duration reported by either peer.
+- The non-master peer sends a `sync_check` heartbeat every **1.5 seconds**. The master peer uses its heartbeat to keep the server clock accurate.
 - Drift larger than **2 seconds** triggers a `sync_nudge` to the non-master peer.
-- After any seek or `sync_nudge`, both the server and the client enter a **1.5-second cooldown** before drift is checked or reported again. This gives the video element time to finish seeking before positions are compared, preventing nudge feedback loops.
-- `play_pause` commands are deduplicated by content (same `playing` state and position within 80 ms) rather than by time alone, which prevents echo storms when the mirrored command arrives back from the other peer.
-- Duration matching is used as a lightweight check that both users picked the same file.
-- If one user leaves, playback is paused for the remaining user.
-- Returning to the lobby resets readiness and playback state.
+- After any seek or `sync_nudge`, both sides enter a **1.5-second cooldown** before drift is checked again, preventing nudge feedback loops.
+- `play_pause` commands are deduplicated by content (same `playing` state and position within 80 ms) to prevent echo storms when the mirrored command bounces back from the other peer.
+- `countdown_start` includes `serverTs` so peers that receive it late still enter the watch screen at the same real-world time.
+- If one user leaves, playback is paused for the remaining user. A **9-second grace window** prevents a brief WebSocket drop from tearing down the WebRTC call and forcing a full ICE renegotiation on reconnect.
+- Returning to the lobby resets readiness and playback state for both users.
 
 ## Troubleshooting
 
 ### WebSocket connection fails
 
-**Symptoms:** "Connection refused" or "Failed to connect" errors in the browser console.
+**Symptoms:** "Connection refused" or "Failed to connect" in the browser console.
 
 **Solutions:**
-- Verify the backend is running: Check `http://localhost:3001/health` (or your deployed URL).
-- Check `frontend/config.js` points to the correct backend URL.
-- Ensure `CORS_ORIGIN` in backend environment includes your frontend URL.
-- Verify firewall/network allows WebSocket connections on the backend port.
+- Verify the backend is running: check `http://localhost:3001/health`.
+- Confirm `frontend/config.js` points to the correct backend URL.
+- Ensure `CORS_ORIGIN` in the backend environment includes your frontend URL.
 
 ### Video call doesn't start
 
-**Symptoms:** P2P video not appearing or camera unavailable error.
+**Symptoms:** P2P video not appearing, camera unavailable.
 
 **Solutions:**
-- Grant browser permission for camera and microphone when prompted.
-- Ensure both browsers support WebRTC (check console for errors like `getUserMedia failed`).
-- Check NAT/firewall rules; some corporate networks block WebRTC. Try enabling TURN in `frontend/src/webrtc.js` or deploy your own TURN server.
-- Verify `webrtc.js` module is loaded: Check browser DevTools Network tab.
+- Grant camera and microphone permissions when prompted.
+- Check NAT/firewall rules — some corporate networks block WebRTC. Deploy your own TURN server or use a hosted service.
+- Verify `webrtc.js` is loading in DevTools → Network.
+
+### YouTube video shows "Watch on YouTube"
+
+**Symptoms:** Grey IFrame with a "Watch on YouTube" button instead of the video.
+
+**Solutions:**
+- The video has embedding disabled (YouTube error 101/150). Very common for music videos and movie trailers.
+- Try a different video. Tutorial channels, TED talks, and most independent creators work fine.
+- The app shows a toast identifying this error automatically.
+
+### YouTube video loads on one side but not the other
+
+**Symptoms:** One peer sees the thumbnail, the other still shows "Paste a YouTube link…".
+
+**Solutions:**
+- The backend is likely running an older version that doesn't handle `youtube_link`. Check the console on the sender's side for `[WT] Server error: Unknown message type: youtube_link` and redeploy with the latest `wsHandler.js`.
+
+### Mode switch notice not appearing for the other user
+
+**Symptoms:** Switching to YouTube mode does nothing on the friend's screen.
+
+**Solutions:**
+- Same cause — the backend doesn't handle `mode_change`. Look for `[WT] Server error: Unknown message type: mode_change` and redeploy `wsHandler.js`.
+
+### Countdown starts at different times
+
+**Symptoms:** One user enters the watch screen 1-4 seconds before the other.
+
+**Solutions:**
+- Make sure both frontend and backend are on the latest versions. The `serverTs` field in `countdown_start` is what aligns the countdowns.
+- Very high one-way latency (> 2s) will still cause small gaps — expected on extremely slow connections.
 
 ### Video playback out of sync
 
-**Symptoms:** Videos drift apart, or you see repeated "nudging peer" lines in the backend log for the same position.
+**Symptoms:** Videos drift apart, or repeated "nudging peer" lines in the backend log for the same position.
 
 **Solutions:**
-- Ensure both files are identical (same resolution, codec, and duration). The `duration_check` message in the protocol will flag a mismatch.
-- Repeated nudges for the same position usually mean one browser is pausing or throttling video decode (e.g. tab in the background, power-saver mode, or hardware decode stall). Bring the tab to the foreground and check CPU usage.
-- Network latency above ~500 ms can cause the 1.5-second post-seek cooldown to expire before the seek has fully landed. If this is a persistent issue on a slow connection, increase `SYNC_SUPPRESS_AFTER_SEEK_MS` in `client.js` and `nudgeCooldownUntil` offset in `wsHandler.js` to `2500`.
-- Disable other bandwidth-heavy tasks on your network during the session.
+- For local file mode, ensure both files are identical (same codec and duration). The `duration_check` will flag a mismatch.
+- For YouTube mode, confirm both sides loaded the same video ID.
+- Bring tabs to the foreground — background tabs throttle timers, causing drift.
+- On slow connections, increase `SYNC_SUPPRESS_AFTER_SEEK_MS` in `client.js` and `nudgeCooldownUntil` in `wsHandler.js` to `2500`.
 
 ### Room persists after refresh
 
-**Note:** This is expected behavior. Rooms are stored in memory and persist even after all users leave. If a user opens a room link later, they will see the old room state. To reset, restart the backend.
-
-### Localhost connection shows "ws://localhost:3001" but still fails
-
-**Solution:** Ensure the backend is running on the same machine. Port 3001 must be available and not blocked by another service. Use `netstat -ano | findstr :3001` (Windows) or `lsof -i :3001` (Mac/Linux) to check.
+**Note:** Expected — rooms are in-memory. To reset, restart the backend.
 
 ### Deployed frontend can't reach deployed backend
 
-**Symptoms:** CORS errors or connection timeouts in production.
+**Symptoms:** CORS errors or timeouts in production.
 
 **Solutions:**
-- Verify `frontend/config.js` uses the correct backend URL (must be the full Render URL, not localhost).
-- Check backend `CORS_ORIGIN` environment variable includes the frontend domain.
-- Verify both Render and Vercel deployments are active and running.
-- Enable Render Pro to prevent backend from spinning down.
+- Confirm `frontend/config.js` has the full Render URL (not localhost).
+- Check that `CORS_ORIGIN` on the backend includes the frontend domain.
+- Enable Render Pro to prevent the backend from spinning down.
 
 ## Notes
 
-- Rooms are stored in memory only.
-- Each room supports up to 2 peers.
-- Room links such as `/COOL-1234` open the same frontend and auto-join flow.
+- Rooms are in-memory only and support up to 2 peers.
+- Room links such as `/COOL-1234` open the frontend and auto-join the room.
+- YouTube sync accuracy is ~250 ms (IFrame API polling). Local file sync is frame-accurate via the native `<video>` element.
 - For split deploys, set `frontend/config.js` to your Render backend URL.
