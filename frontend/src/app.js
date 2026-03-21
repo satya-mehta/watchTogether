@@ -1618,11 +1618,47 @@ async function startVideoCall() {
     .on('ice_failed', () => {
       showToast('Video call could not connect — network may be blocking P2P. Try a different network.', 'warn');
     })
+    .on('quality_changed', ({ tier }) => {
+      const toastMessages = {
+        high:       null,
+        medium:     '📶 Weak network — reducing video quality to stay connected',
+        low:        '📶 Poor network — switching to low quality video',
+        audio_only: '📶 Very weak network — video paused, audio only',
+      };
+      const badgeLabels = {
+        high:       '',
+        medium:     '📶 Medium quality',
+        low:        '📶 Low quality',
+        audio_only: '📶 Audio only',
+      };
+      const badgeColors = {
+        high:       '',
+        medium:     '#fbbf24',
+        low:        '#f97316',
+        audio_only: '#ef4444',
+      };
+      const msg = toastMessages[tier];
+      if (msg) showToast(msg, 'info');
+      const pipBubble = document.getElementById('pip-bubble');
+      if (pipBubble) pipBubble.dataset.quality = tier;
+      const badge = document.getElementById('pip-quality-badge');
+      if (badge) {
+        badge.textContent = badgeLabels[tier] || '';
+        badge.style.display = tier !== 'high' ? 'block' : 'none';
+        badge.style.color = badgeColors[tier] || '#fbbf24';
+      }
+      console.log('[Call] Quality tier:', tier);
+    })
     .on('ended', () => {
       if (remoteCamOff) remoteCamOff.style.display = 'none';
       showCallUI(false);
       window.activeCall = null;
       call = null;
+      // Reset quality badge
+      const badge = document.getElementById('pip-quality-badge');
+      if (badge) badge.style.display = 'none';
+      const pipBubble = document.getElementById('pip-bubble');
+      if (pipBubble) delete pipBubble.dataset.quality;
     });
 
   // Host is the WebRTC offer initiator; guest auto-answers via 'peer_joined' signal

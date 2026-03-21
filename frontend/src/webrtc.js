@@ -18,17 +18,19 @@
  * Signalling is wired automatically via client.sendSignal / client.on('webrtc_signal').
  *
  * Events emitted:
- *   started          { hasVideo, hasAudio }  — camera acquired, local preview live
- *   show_pip         {}                      — host should make pip-bubble visible now
- *   connected        {}                      — ICE connected, P2P call is live
- *   remote_stream    { stream }              — remote video/audio stream attached
- *   peer_disconnected{}
- *   mute_changed     { muted }
- *   camera_changed   { hidden }
- *   camera_unavailable {}
- *   media_unavailable  {}
- *   ice_state        { state }
- *   ended            {}
+ *   started              { hasVideo, hasAudio }
+ *   show_pip             {}
+ *   connected            {}
+ *   remote_stream        { stream }
+ *   peer_disconnected    {}
+ *   mute_changed         { muted }
+ *   camera_changed       { hidden }
+ *   camera_unavailable   {}
+ *   media_unavailable    {}
+ *   ice_state            { state }
+ *   quality_changed      { tier }   — 'high' | 'medium' | 'low' | 'audio_only'
+ *   ice_failed           {}
+ *   ended                {}
  */
 
 const ICE_SERVERS = [
@@ -52,12 +54,68 @@ const ICE_SERVERS = [
   },
 ];
 
+// ── Quality tiers ──────────────────────────────────────────────────────────
+// Each tier defines the video constraints sent via RTCRtpSender.setParameters().
+// Audio is never degraded — only video resolution and frame rate are reduced.
+// 'audio_only' disables the video track entirely (track.enabled = false) to
+// free all bandwidth for audio continuity.
+const QUALITY_TIERS = {
+  high: {
+    label:     'high',
+    maxWidth:  640,
+    maxHeight: 480,
+    maxFps:    24,
+    maxKbps:   600,
+  },
+  medium: {
+    label:     'medium',
+    maxWidth:  320,
+    maxHeight: 240,
+    maxFps:    15,
+    maxKbps:   250,
+  },
+  low: {
+    label:     'low',
+    maxWidth:  160,
+    maxHeight: 120,
+    maxFps:    10,
+    maxKbps:   80,
+  },
+  audio_only: {
+    label:     'audio_only',
+    maxWidth:  0,
+    maxHeight: 0,
+    maxFps:    0,
+    maxKbps:   0,
+  },
+};
+
+// How many consecutive poor samples before stepping down a tier
+const DOWNGRADE_THRESHOLD   = 3;
+// How many consecutive good samples before stepping up a tier
+const UPGRADE_THRESHOLD     = 8;
+// Polling interval for quality stats (ms)
+const QUALITY_POLL_MS       = 3000;
+// Packet loss % above which we consider quality poor
+const LOSS_BAD_PCT          = 8;
+// Packet loss % below which we consider quality good enough to upgrade
+const LOSS_GOOD_PCT         = 2;
+// Round-trip time (ms) above which quality is poor
+const RTT_BAD_MS            = 400;
+// Round-trip time (ms) below which quality is good
+const RTT_GOOD_MS            = 200;
+// Minimum time (ms) between quality tier changes to avoid thrashing
+const QUALITY_CHANGE_COOLDOWN_MS = 12000;
+
+// How long 'disconnected' must persist before we attempt an ICE restart (ms).
+// The old value was 2500ms — too short. Mobile networks and congested WiFi
+// regularly produce 1–3s ICE disconnects that self-recover without any
+// intervention. Firing a restart at 2500ms was cancelling recoveries that
+// would have succeeded on their own, creating the endless
+// disconnect→restart→peer_left→peer_joined loop visible in the logs.
+const ICE_DISCONNECT_RESTART_DELAY_MS = 7000;
+
 export class VideoCall extends EventTarget {
-  /**
-   * @param {WatchTogetherClient} client   - signalling transport
-   * @param {HTMLVideoElement}    localEl  - <video> for your own camera (muted)
-   * @param {HTMLVideoElement}    remoteEl - <video> for the peer's camera
-   */
   constructor(client, localEl, remoteEl) {
     super();
     this.client    = client;
@@ -67,35 +125,33 @@ export class VideoCall extends EventTarget {
     this.localStream  = null;
     this.isInitiator  = false;
     this._started     = false;
-    this._pendingCandidates = [];
-    this._remotePlayBlocked = false;
+    this._pendingCandidates    = [];
+    this._remotePlayBlocked    = false;
     this._boundRemotePlaybackRetry = () => this._retryRemotePlayback();
-    this._unsubscribeClientEvents = [];
-    this._remoteStreamTimer = null;
-    this._disconnectTimer  = null;
-    this._videoSender = null;
-    this._audioSender = null;
-    this._cameraSwitching = false;
-    this._cameraEnabled   = true;
+    this._unsubscribeClientEvents  = [];
+    this._remoteStreamTimer    = null;
+    this._disconnectTimer      = null;
+    this._videoSender          = null;
+    this._audioSender          = null;
+    this._cameraSwitching      = false;
+    this._cameraEnabled        = true;
+    this._makingOffer          = false;
+    this._iceRestartCount      = 0;
 
-    // BUG FIX: track whether we are in the middle of creating an offer.
-    // Without this flag, three separate code paths can all call _createOffer()
-    // at once: (1) onnegotiationneeded fires when addTrack is called in
-    // _createPeerConnection, (2) start() explicitly calls _createOffer() for
-    // the initiator, (3) peer_joined also triggers _createOffer(). Two
-    // concurrent offers corrupt the PC signalingState → ICE never connects
-    // → remote video stays blank forever.
-    this._makingOffer = false;
-    this._iceRestartCount = 0;  // cap restart attempts to prevent infinite loops
+    // ── Adaptive quality state ──────────────────────────────────────────
+    this._currentTier          = 'high';
+    this._qualityPollTimer     = null;
+    this._poorSampleCount      = 0;
+    this._goodSampleCount      = 0;
+    this._lastQualityChangeAt  = 0;
+    this._lastStats            = null;  // previous RTCStatsReport snapshot
+    this._videoDisabledForQuality = false; // true when tier = audio_only
 
     // Wire incoming signals
     this._unsubscribeClientEvents.push(
       this.client.listen('webrtc_signal', (data) => this._onSignal(data.signal))
     );
 
-    // When the peer joins and we are the host, kick off negotiation.
-    // onnegotiationneeded will also fire from addTrack calls, so guard
-    // with _makingOffer to avoid sending a second simultaneous offer.
     this._unsubscribeClientEvents.push(
       this.client.listen('peer_joined', () => {
         if (this.isInitiator && this._started) this._createOffer();
@@ -103,7 +159,7 @@ export class VideoCall extends EventTarget {
     );
   }
 
-  // ── Public API ──────────────────────────────────────────────────────────
+  // ── Public API ────────────────────────────────────────────────────────
 
   async start(isInitiator = false) {
     this.isInitiator = isInitiator;
@@ -125,38 +181,20 @@ export class VideoCall extends EventTarget {
       }
     }
 
-    // BUG FIX: set muted / autoplay / playsInline BEFORE assigning srcObject.
-    // When srcObject is assigned, some browsers immediately attempt playback.
-    // If autoplay/muted are not set yet at that moment, the attempt is
-    // rejected (autoplay policy) and the local preview stays black.
     if (this.localEl) {
       try {
-        this.localEl.muted      = true;   // must be true to avoid echo and pass autoplay
-        this.localEl.autoplay   = true;
+        this.localEl.muted       = true;
+        this.localEl.autoplay    = true;
         this.localEl.playsInline = true;
-        this.localEl.srcObject  = this.localStream;
-        // play() may still be needed on iOS / certain browsers
+        this.localEl.srcObject   = this.localStream;
         this.localEl.play().catch(() => {});
       } catch (err) {
         console.error('[WebRTC] Failed to attach local stream:', err.message);
       }
-    } else {
-      console.error('[WebRTC] localEl not found — pass the correct <video> element');
     }
 
     this._createPeerConnection();
-
-    // BUG FIX: do NOT call _createOffer() explicitly here for the initiator.
-    // _createPeerConnection() calls addTrack() or addTransceiver() which
-    // synchronously queues a negotiationneeded event. That event fires
-    // _createOffer() via onnegotiationneeded. Calling _createOffer() here
-    // in addition creates a SECOND concurrent offer, corrupting state.
-    // The onnegotiationneeded path (guarded by _makingOffer) is the single
-    // canonical source of truth for offer creation.
-
     this._armRemoteStreamWatchdog();
-
-    // Signal the UI that the local preview is ready and the pip can be shown.
     this._emit('started', { hasVideo: this.hasVideo, hasAudio: this.hasAudio });
     this._emit('show_pip');
   }
@@ -172,32 +210,20 @@ export class VideoCall extends EventTarget {
 
   toggleCamera() {
     this._cameraEnabled = !this._cameraEnabled;
-    const hidden = !this._cameraEnabled;
     if (this._cameraEnabled) {
       this._resumeCamera();
     } else {
       this._releaseCamera();
     }
-    return hidden;
+    return !this._cameraEnabled;
   }
 
   async _releaseCamera() {
     if (this._cameraSwitching) return;
     this._cameraSwitching = true;
     try {
-      // BUG FIX: do NOT call removeTrack() or stop() the track.
-      // removeTrack() triggers onnegotiationneeded → a new offer → ICE restart,
-      // which causes the remote video to blank out permanently and the connection
-      // to thrash. stop() permanently kills the track; it can never be re-enabled.
-      //
-      // The correct approach: just disable the track. This sends black/silent
-      // frames to the remote peer (they see the camera-off state) without
-      // touching the PC negotiation at all. No renegotiation, no ICE restart.
       const videoTrack = this._getTrack('video');
-      if (videoTrack) {
-        videoTrack.enabled = false;
-      }
-      // Hide local preview so the user doesn’t see their own frozen frame
+      if (videoTrack) videoTrack.enabled = false;
       if (this.localEl) this.localEl.style.opacity = '0';
       this._emit('camera_changed', { hidden: true });
       console.log('[WebRTC] Camera disabled (track muted, no renegotiation)');
@@ -212,13 +238,14 @@ export class VideoCall extends EventTarget {
     if (this._cameraSwitching) return;
     this._cameraSwitching = true;
     try {
-      // BUG FIX: if the track still exists and was only disabled, just re-enable it.
-      // This is the fast path — no getUserMedia, no renegotiation, no ICE restart.
       const existingTrack = this._getTrack('video');
       if (existingTrack) {
-        existingTrack.enabled = true;
+        // Only re-enable if quality tier hasn't suppressed it
+        if (!this._videoDisabledForQuality) {
+          existingTrack.enabled = true;
+        }
         if (this.localEl) {
-          this.localEl.style.opacity = '1';
+          this.localEl.style.opacity = this._videoDisabledForQuality ? '0' : '1';
           this.localEl.play().catch(() => {});
         }
         this._emit('camera_changed', { hidden: false });
@@ -226,9 +253,6 @@ export class VideoCall extends EventTarget {
         return;
       }
 
-      // Slow path: track was stopped (e.g. OS revoked it) — acquire a new one.
-      // We replace the sender’s track via replaceTrack() which swaps the media
-      // without triggering renegotiation (unlike removeTrack+addTrack).
       const videoStream = await navigator.mediaDevices.getUserMedia({
         video: { width: { ideal: 640 }, height: { ideal: 480 }, facingMode: 'user' },
       }).catch(err => {
@@ -240,7 +264,6 @@ export class VideoCall extends EventTarget {
       const videoTrack = videoStream.getVideoTracks()[0];
       if (!videoTrack) throw new Error('No video track in resumed stream');
 
-      // replaceTrack swaps media mid-call with zero renegotiation
       if (this._videoSender) {
         await this._videoSender.replaceTrack(videoTrack);
       } else if (this.pc) {
@@ -269,8 +292,10 @@ export class VideoCall extends EventTarget {
   get isCamOff() { return !this._cameraEnabled; }
   get hasVideo() { return (this.localStream?.getVideoTracks().length ?? 0) > 0; }
   get hasAudio() { return (this.localStream?.getAudioTracks().length ?? 0) > 0; }
+  get qualityTier() { return this._currentTier; }
 
   end() {
+    this._stopQualityMonitor();
     this._unsubscribeClientEvents.forEach(u => { try { u(); } catch {} });
     this._unsubscribeClientEvents = [];
     clearTimeout(this._remoteStreamTimer);
@@ -288,18 +313,23 @@ export class VideoCall extends EventTarget {
     this._cameraSwitching = false;
     this._cameraEnabled   = true;
     this._remotePlayBlocked = false;
+    this._videoDisabledForQuality = false;
+    this._currentTier = 'high';
+    this._poorSampleCount = 0;
+    this._goodSampleCount = 0;
+    this._lastStats = null;
     if (this.localEl)  this.localEl.srcObject  = null;
     if (this.remoteEl) this.remoteEl.srcObject = null;
-    document.removeEventListener('pointerup',          this._boundRemotePlaybackRetry, true);
-    document.removeEventListener('touchend',           this._boundRemotePlaybackRetry, true);
-    document.removeEventListener('keydown',            this._boundRemotePlaybackRetry, true);
-    document.removeEventListener('visibilitychange',   this._boundRemotePlaybackRetry, true);
-    document.removeEventListener('fullscreenchange',   this._boundRemotePlaybackRetry, true);
+    document.removeEventListener('pointerup',        this._boundRemotePlaybackRetry, true);
+    document.removeEventListener('touchend',         this._boundRemotePlaybackRetry, true);
+    document.removeEventListener('keydown',          this._boundRemotePlaybackRetry, true);
+    document.removeEventListener('visibilitychange', this._boundRemotePlaybackRetry, true);
+    document.removeEventListener('fullscreenchange', this._boundRemotePlaybackRetry, true);
     this._emit('ended');
     console.log('[WebRTC] Call ended');
   }
 
-  // ── Peer connection setup ───────────────────────────────────────────────
+  // ── Peer connection setup ─────────────────────────────────────────────
 
   _createPeerConnection() {
     if (this.pc) this.pc.close();
@@ -307,12 +337,6 @@ export class VideoCall extends EventTarget {
 
     this.pc = new RTCPeerConnection({ iceServers: ICE_SERVERS });
 
-    // BUG FIX: when getUserMedia fails and localStream is empty (no tracks),
-    // addTrack() is never called, onnegotiationneeded never fires, and the
-    // PC has no direction set — so even if the peer sends an offer with video,
-    // the local side has no receivers for it. Fix: explicitly add sendrecv
-    // transceivers when we have tracks, or recvonly transceivers when we
-    // don't. This also ensures onnegotiationneeded fires reliably.
     const tracks = this.localStream?.getTracks() ?? [];
     if (tracks.length > 0) {
       tracks.forEach(track => {
@@ -321,20 +345,14 @@ export class VideoCall extends EventTarget {
         if (track.kind === 'audio') this._audioSender = sender;
       });
     } else {
-      // No local media — still set up bidirectional negotiation so we can
-      // receive the remote peer's stream.
       this.pc.addTransceiver('video', { direction: 'recvonly' });
       this.pc.addTransceiver('audio', { direction: 'recvonly' });
     }
 
-    // Remote tracks → attach to remoteEl
     this.pc.ontrack = (event) => {
       console.log('[WebRTC] Got remote track:', event.track.kind);
       const attachRemoteStream = () => {
-        if (!this.remoteEl) {
-          console.error('[WebRTC] remoteEl not found!');
-          return;
-        }
+        if (!this.remoteEl) return;
         try {
           const [remoteStream] = event.streams;
           if (remoteStream) {
@@ -348,7 +366,6 @@ export class VideoCall extends EventTarget {
               this.remoteEl.srcObject.addTrack(event.track);
             }
           }
-          // Set attributes before play() for the same reason as local video
           this.remoteEl.autoplay    = true;
           this.remoteEl.playsInline = true;
           this.remoteEl.muted       = false;
@@ -370,12 +387,8 @@ export class VideoCall extends EventTarget {
         attachRemoteStream();
         if (event.track.kind === 'video') this._emit('remote_camera_on');
       };
-      // When the remote peer turns camera off, their video track becomes muted
       event.track.onmute = () => {
-        if (event.track.kind === 'video') {
-          console.log('[WebRTC] Remote camera turned off');
-          this._emit('remote_camera_off');
-        }
+        if (event.track.kind === 'video') this._emit('remote_camera_off');
       };
       event.track.onended = () => {
         if (event.track.kind === 'video') {
@@ -399,45 +412,50 @@ export class VideoCall extends EventTarget {
       if (state === 'connected' || state === 'completed') {
         clearTimeout(this._disconnectTimer);
         this._disconnectTimer = null;
-        this._iceRestartCount = 0; // successful connection — reset counter
+        this._iceRestartCount = 0;
         this._emit('connected');
+        // Start quality monitoring once we have a stable connection
+        this._startQualityMonitor();
       } else if (state === 'failed') {
         console.warn('[WebRTC] ICE failed — attempting restart');
+        this._stopQualityMonitor();
         this._iceRestart();
       } else if (state === 'disconnected') {
         this._emit('peer_disconnected');
+        this._stopQualityMonitor();
+        // FIX: use a much longer delay (7s) before restarting.
+        // 'disconnected' is a transient state on mobile / weak WiFi —
+        // the browser's own ICE keep-alives usually recover it within
+        // 1-4 seconds without any intervention. The old 2500ms timer was
+        // firing during self-recoveries, aborting them and creating the
+        // endless disconnect→restart→peer_left→peer_joined cycle in the logs.
         if (!this._disconnectTimer) {
           this._disconnectTimer = setTimeout(() => {
             this._disconnectTimer = null;
-            this._iceRestart();
-          }, 2500);
+            // Re-check state — might have self-recovered during the wait
+            if (this.pc?.iceConnectionState === 'disconnected' ||
+                this.pc?.iceConnectionState === 'failed') {
+              console.warn('[WebRTC] ICE still disconnected after grace period — restarting');
+              this._iceRestart();
+            } else {
+              console.log('[WebRTC] ICE self-recovered during grace period — no restart needed');
+            }
+          }, ICE_DISCONNECT_RESTART_DELAY_MS);
         }
       } else if (state === 'checking') {
         this._armRemoteStreamWatchdog();
       }
     };
 
-    // BUG FIX: guard with _makingOffer so this handler and the peer_joined
-    // handler never create two concurrent offers. Without the guard:
-    //   • addTrack() → onnegotiationneeded → _createOffer()  [offer #1]
-    //   • start() was also calling _createOffer() explicitly  [offer #2]
-    //   • peer_joined could call _createOffer() as well       [offer #3]
-    // Two simultaneous setLocalDescription calls throw InvalidStateError
-    // and the PC ends up stuck in a broken state.
     this.pc.onnegotiationneeded = async () => {
-      // Perfect Negotiation: allow both peers to renegotiate so that
-      // camera/mic toggles by the non-host are also signalled to the remote.
-      // Glare (simultaneous offers) is resolved in _onSignal below.
       await this._createOffer();
     };
   }
 
-  // ── Offer / Answer ──────────────────────────────────────────────────────
+  // ── Offer / Answer ────────────────────────────────────────────────────
 
   async _createOffer() {
     if (!this.pc) return;
-
-    // BUG FIX: skip if already in the middle of creating an offer.
     if (this._makingOffer) {
       console.log('[WebRTC] Skipping redundant _createOffer (already making one)');
       return;
@@ -449,7 +467,6 @@ export class VideoCall extends EventTarget {
         offerToReceiveVideo: true,
         offerToReceiveAudio: true,
       });
-      // Guard again: signalingState must still be 'stable' (no race)
       if (this.pc.signalingState !== 'stable') {
         console.warn('[WebRTC] signalingState changed before setLocalDescription — aborting offer');
         return;
@@ -478,7 +495,7 @@ export class VideoCall extends EventTarget {
     }
   }
 
-  // ── Incoming signal handler ─────────────────────────────────────────────
+  // ── Incoming signal handler ───────────────────────────────────────────
 
   async _onSignal(signal) {
     if (!signal) return;
@@ -486,23 +503,14 @@ export class VideoCall extends EventTarget {
     switch (signal.type) {
       case 'offer':
         console.log('[WebRTC] Received offer');
-        if (!this._started) {
-          await this.start(false);
-        }
-        // Perfect Negotiation glare handling.
-        // If we are also in the middle of making an offer (race), the
-        // "impolite" peer (initiator) silently drops the incoming offer and
-        // keeps their own. The "polite" peer (non-initiator) rolls back their
-        // pending offer and accepts the incoming one instead.
+        if (!this._started) await this.start(false);
         {
           const collision = this._makingOffer || this.pc?.signalingState !== 'stable';
           if (collision) {
             if (this.isInitiator) {
-              // Impolite peer — ignore the colliding incoming offer.
               console.log('[WebRTC] Offer collision — impolite peer ignoring incoming offer');
               break;
             }
-            // Polite peer — roll back our pending offer and answer theirs.
             console.log('[WebRTC] Offer collision — polite peer rolling back');
             await this.pc.setLocalDescription({ type: 'rollback' }).catch(() => {});
             this._makingOffer = false;
@@ -529,11 +537,6 @@ export class VideoCall extends EventTarget {
           this._pendingCandidates.push(signal.candidate);
         }
         break;
-
-      // BUG FIX: removed the 'ice_restart' case entirely. The old _iceRestart()
-      // was sending BOTH a new offer (correct) AND an 'ice_restart' signal that
-      // told the peer to also create an offer (wrong). That caused an offer
-      // collision. Now ICE restart is handled solely by the new offer.
     }
   }
 
@@ -547,15 +550,10 @@ export class VideoCall extends EventTarget {
   async _iceRestart() {
     if (!this.pc || !this.isInitiator) return;
 
-    // BUG FIX: cap restart attempts. Without this, the watchdog would trigger
-    // _iceRestart, which re-armed the watchdog, which triggered another restart
-    // in 5s — an infinite loop visible as 20+ "Remote stream missing" lines.
-    // After MAX_RESTARTS failures we give up and emit 'failed' so the UI can
-    // show a clear message rather than silently looping forever.
     const MAX_RESTARTS = 4;
     this._iceRestartCount = (this._iceRestartCount || 0) + 1;
     if (this._iceRestartCount > MAX_RESTARTS) {
-      console.warn(`[WebRTC] Gave up after ${MAX_RESTARTS} ICE restarts — network may be blocked`);
+      console.warn(`[WebRTC] Gave up after ${MAX_RESTARTS} ICE restarts`);
       this._emit('ice_failed');
       return;
     }
@@ -565,10 +563,6 @@ export class VideoCall extends EventTarget {
       const offer = await this.pc.createOffer({ iceRestart: true });
       await this.pc.setLocalDescription(offer);
       this.client.sendSignal({ type: 'offer', sdp: offer });
-      // BUG FIX: do NOT re-arm the watchdog here. The watchdog is already
-      // re-armed by oniceconnectionstatechange → 'checking', which fires as
-      // soon as ICE starts negotiating. Re-arming here caused the infinite
-      // loop: watchdog → restart → re-arm watchdog → restart → ...
       console.log(`[WebRTC] ICE restart offer sent (attempt ${this._iceRestartCount}/${MAX_RESTARTS})`);
     } catch (err) {
       console.error('[WebRTC] ICE restart failed:', err);
@@ -577,7 +571,193 @@ export class VideoCall extends EventTarget {
     }
   }
 
-  // ── Helpers ─────────────────────────────────────────────────────────────
+  // ── Adaptive quality monitor ──────────────────────────────────────────
+
+  _startQualityMonitor() {
+    this._stopQualityMonitor();
+    // Only the initiator adjusts their own outbound video quality.
+    // The non-initiator's quality is governed by their own monitor.
+    // Both run independently and adapt their own sending side.
+    if (!this._videoSender) return;
+    this._qualityPollTimer = setInterval(() => this._pollQuality(), QUALITY_POLL_MS);
+    console.log('[WebRTC] Quality monitor started');
+  }
+
+  _stopQualityMonitor() {
+    if (this._qualityPollTimer) {
+      clearInterval(this._qualityPollTimer);
+      this._qualityPollTimer = null;
+    }
+  }
+
+  async _pollQuality() {
+    if (!this.pc || !this._videoSender) return;
+    if (this.pc.iceConnectionState !== 'connected' &&
+        this.pc.iceConnectionState !== 'completed') return;
+
+    try {
+      const stats = await this.pc.getStats(this._videoSender);
+      const { lossPercent, rttMs } = this._extractQualityMetrics(stats);
+      this._lastStats = stats;
+
+      const isPoor = lossPercent > LOSS_BAD_PCT || rttMs > RTT_BAD_MS;
+      const isGood = lossPercent < LOSS_GOOD_PCT && rttMs < RTT_GOOD_MS;
+
+      if (isPoor) {
+        this._goodSampleCount = 0;
+        this._poorSampleCount++;
+        console.log(`[WebRTC] Quality poor: loss=${lossPercent.toFixed(1)}% rtt=${rttMs}ms (${this._poorSampleCount}/${DOWNGRADE_THRESHOLD})`);
+        if (this._poorSampleCount >= DOWNGRADE_THRESHOLD) {
+          this._poorSampleCount = 0;
+          this._stepDownQuality();
+        }
+      } else if (isGood) {
+        this._poorSampleCount = 0;
+        this._goodSampleCount++;
+        console.log(`[WebRTC] Quality good: loss=${lossPercent.toFixed(1)}% rtt=${rttMs}ms (${this._goodSampleCount}/${UPGRADE_THRESHOLD})`);
+        if (this._goodSampleCount >= UPGRADE_THRESHOLD) {
+          this._goodSampleCount = 0;
+          this._stepUpQuality();
+        }
+      } else {
+        // Neutral — decay both counters slowly so we don't get stuck
+        this._poorSampleCount = Math.max(0, this._poorSampleCount - 1);
+        this._goodSampleCount = Math.max(0, this._goodSampleCount - 1);
+      }
+    } catch (err) {
+      // getStats() can throw if the PC is closing — ignore silently
+    }
+  }
+
+  _extractQualityMetrics(stats) {
+    let lossPercent = 0;
+    let rttMs = 0;
+    let foundOutbound = false;
+    let foundCandidatePair = false;
+
+    stats.forEach(report => {
+      // Outbound video RTP for packet loss
+      if (report.type === 'outbound-rtp' && report.kind === 'video') {
+        const sent = (report.packetsSent ?? 0);
+        const lost = (report.packetsLost ?? 0);
+        if (sent + lost > 0) {
+          lossPercent = (lost / (sent + lost)) * 100;
+          foundOutbound = true;
+        }
+      }
+      // Active candidate pair for round-trip time
+      if (report.type === 'candidate-pair' && report.state === 'succeeded') {
+        if (typeof report.currentRoundTripTime === 'number') {
+          rttMs = report.currentRoundTripTime * 1000;
+          foundCandidatePair = true;
+        }
+      }
+    });
+
+    return { lossPercent, rttMs, foundOutbound, foundCandidatePair };
+  }
+
+  _tierOrder() {
+    return ['high', 'medium', 'low', 'audio_only'];
+  }
+
+  _stepDownQuality() {
+    const now = Date.now();
+    if (now - this._lastQualityChangeAt < QUALITY_CHANGE_COOLDOWN_MS) return;
+
+    const order = this._tierOrder();
+    const idx = order.indexOf(this._currentTier);
+    if (idx >= order.length - 1) return; // already at lowest
+
+    const nextTier = order[idx + 1];
+    this._applyQualityTier(nextTier);
+  }
+
+  _stepUpQuality() {
+    const now = Date.now();
+    if (now - this._lastQualityChangeAt < QUALITY_CHANGE_COOLDOWN_MS) return;
+
+    const order = this._tierOrder();
+    const idx = order.indexOf(this._currentTier);
+    if (idx <= 0) return; // already at highest
+
+    const nextTier = order[idx - 1];
+    this._applyQualityTier(nextTier);
+  }
+
+  async _applyQualityTier(tierName) {
+    if (tierName === this._currentTier) return;
+    if (!this._videoSender) return;
+
+    const tier = QUALITY_TIERS[tierName];
+    if (!tier) return;
+
+    const prevTier = this._currentTier;
+    this._currentTier = tierName;
+    this._lastQualityChangeAt = Date.now();
+
+    console.log(`[WebRTC] Quality tier: ${prevTier} → ${tierName}`);
+
+    // ── audio_only: disable video track entirely ──────────────────────
+    if (tierName === 'audio_only') {
+      const videoTrack = this._getTrack('video');
+      if (videoTrack && this._cameraEnabled) {
+        videoTrack.enabled = false;
+        this._videoDisabledForQuality = true;
+        if (this.localEl) this.localEl.style.opacity = '0';
+        console.log('[WebRTC] Video disabled — audio only mode');
+      }
+      this._emit('quality_changed', { tier: tierName });
+      return;
+    }
+
+    // ── Restore video track if coming back from audio_only ────────────
+    if (prevTier === 'audio_only' && this._videoDisabledForQuality) {
+      const videoTrack = this._getTrack('video');
+      if (videoTrack && this._cameraEnabled) {
+        videoTrack.enabled = true;
+        this._videoDisabledForQuality = false;
+        if (this.localEl) this.localEl.style.opacity = '1';
+        console.log('[WebRTC] Video restored from audio_only');
+      }
+    }
+
+    // ── Apply encoding parameters via RTCRtpSender.setParameters() ───
+    // setParameters() is the standard way to change bitrate/resolution
+    // mid-call without triggering renegotiation. It only affects the
+    // local sending side — the remote peer adapts automatically via
+    // their decoder's congestion control.
+    try {
+      const params = this._videoSender.getParameters();
+      if (!params.encodings || params.encodings.length === 0) {
+        // Some browsers don't populate encodings until after negotiation.
+        // Fall back to just logging — the tier label is still tracked.
+        console.warn('[WebRTC] No encodings in sender parameters — cannot apply bitrate cap');
+        this._emit('quality_changed', { tier: tierName });
+        return;
+      }
+
+      params.encodings.forEach(enc => {
+        enc.maxBitrate    = tier.maxKbps * 1000;
+        enc.maxFramerate  = tier.maxFps;
+        // scaleResolutionDownBy: 1 = full res, 2 = half, 4 = quarter
+        // Calculate from maxWidth relative to original 640px capture
+        const scaleFactor = tier.maxWidth > 0 ? Math.max(1, 640 / tier.maxWidth) : 4;
+        enc.scaleResolutionDownBy = scaleFactor;
+        enc.active = true;
+      });
+
+      await this._videoSender.setParameters(params);
+      console.log(`[WebRTC] Encoder: ${tier.maxWidth}×${tier.maxHeight} @ ${tier.maxFps}fps ${tier.maxKbps}kbps`);
+    } catch (err) {
+      console.warn('[WebRTC] setParameters failed (browser may not support it):', err.message);
+      // Non-fatal — the tier label is still tracked for UI and future attempts
+    }
+
+    this._emit('quality_changed', { tier: tierName });
+  }
+
+  // ── Helpers ───────────────────────────────────────────────────────────
 
   _getTrack(kind) {
     return this.localStream?.getTracks().find(t => t.kind === kind) ?? null;
@@ -618,10 +798,6 @@ export class VideoCall extends EventTarget {
         console.warn('[WebRTC] Remote stream missing after timeout — retrying negotiation');
         this._iceRestart();
       }
-    // BUG FIX: was 5000ms — too short for cross-network ICE gathering which
-    // can take 8-15s through different NATs. Firing at 5s would restart the
-    // negotiation while ICE was still in progress, cancelling a connection
-    // that would have succeeded on its own in a few more seconds.
     }, 15000);
   }
 
@@ -633,7 +809,4 @@ export class VideoCall extends EventTarget {
     this.addEventListener(type, (e) => handler(e.detail ?? {}));
     return this;
   }
-  // Events: started, show_pip, connected, remote_stream, remote_camera_off,
-  //   remote_camera_on, peer_disconnected, mute_changed, camera_changed,
-  //   camera_unavailable, media_unavailable, ice_state, ice_failed, ended
 }
