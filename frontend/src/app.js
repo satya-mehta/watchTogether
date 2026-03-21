@@ -106,6 +106,7 @@ let lastRenderedFrameAt = 0;
 let lastFreezeRecoveryAt = 0;
 let freezeRecoveryCount = 0;
 let lastSentPlayPauseCommand = null;
+let syncEngineActing = false; // true while sync engine is calling play/pause — suppresses native event re-broadcast
 let trackRefreshFrame = null;
 let trackRefreshTimeout = null;
 let localSubtitleTrackEl = null;
@@ -585,11 +586,18 @@ function sendPlayPauseCommand(playing, positionSec) {
 
 async function ensureMoviePlaying({ source = 'sync', showHint = false } = {}) {
   if (roomMode === 'youtube') {
-    if (ytPlayer && ytPlayerReady) { ytPlayer.playVideo(); ytIsPaused = false; }
+    if (ytPlayer && ytPlayerReady) {
+      syncEngineActing = true;
+      ytPlayer.playVideo();
+      ytIsPaused = false;
+      // Reset after a tick so onYtStateChange suppression covers the event
+      setTimeout(() => { syncEngineActing = false; }, 200);
+    }
     return true;
   }
   if (movieVideo.paused) {
     try {
+      syncEngineActing = true;
       await movieVideo.play();
       playbackRetryPending = false;
       markPlaybackProgress();
@@ -602,6 +610,8 @@ async function ensureMoviePlaying({ source = 'sync', showHint = false } = {}) {
         showToast('Tap play if your browser paused the video', 'info');
       }
       return false;
+    } finally {
+      syncEngineActing = false;
     }
   }
   playbackRetryPending = false;
@@ -670,8 +680,15 @@ function applyHardSync({ targetPos, playing, announce = false, driftSec = 0 }) {
   if (playing && !shouldPauseAtEnd) {
     ensureMoviePlaying({ source: 'hard-sync', showHint: true });
   } else {
-    if (roomMode === 'youtube') { ytPlayer?.pauseVideo(); ytIsPaused = true; }
-    else movieVideo.pause();
+    syncEngineActing = true;
+    if (roomMode === 'youtube') {
+      if (ytPlayer && typeof ytPlayer.pauseVideo === 'function') { ytPlayer.pauseVideo(); }
+      ytIsPaused = true;
+      setTimeout(() => { syncEngineActing = false; }, 200);
+    } else {
+      movieVideo.pause();
+      syncEngineActing = false;
+    }
   }
 }
 
@@ -710,8 +727,15 @@ async function handleSyncCorrection({ positionSec, playing, serverTs, drift, sou
     }
     const isPaused = roomMode === 'youtube' ? ytIsPaused : movieVideo.paused;
     if (!isPaused) {
-      if (roomMode === 'youtube') { ytPlayer?.pauseVideo(); ytIsPaused = true; }
-      else movieVideo.pause();
+      syncEngineActing = true;
+      if (roomMode === 'youtube') {
+        if (ytPlayer && typeof ytPlayer.pauseVideo === 'function') { ytPlayer.pauseVideo(); }
+        ytIsPaused = true;
+        setTimeout(() => { syncEngineActing = false; }, 200);
+      } else {
+        movieVideo.pause();
+        syncEngineActing = false;
+      }
     }
     return;
   }
@@ -1539,18 +1563,17 @@ function wireVideoControls() {
     // Native controls (Safari, fullscreen overlay, OS media keys) fire 'pause'
     // without going through our play/pause button. Treat this exactly like a
     // button press so the other peer stays in sync.
-    // Guard: only broadcast if we are on the watch screen with a peer present.
-    // The dedup window in sendPlayPauseCommand (300ms, same state) absorbs the
-    // echo that fires when OUR button click causes movieVideo.pause() itself.
-    if (isWatchScreenActive() && peerPresent && !isAtVideoEnd()) {
+    // syncEngineActing suppresses the broadcast when the sync engine itself
+    // triggered the pause — preventing the ping-pong loop where applying a
+    // received play_pause command causes a new play_pause to be sent back.
+    if (isWatchScreenActive() && peerPresent && !isAtVideoEnd() && !syncEngineActing) {
       sendPlayPauseCommand(false, movieVideo.currentTime);
     }
   });
 
   movieVideo.addEventListener('play', () => {
-    // Same as above for the play direction — native play (e.g. Safari overlay,
-    // media key, or Picture-in-Picture resume) should sync to the other peer.
-    if (isWatchScreenActive() && peerPresent) {
+    // Guard with syncEngineActing for the same reason as 'pause' above.
+    if (isWatchScreenActive() && peerPresent && !syncEngineActing) {
       sendPlayPauseCommand(true, movieVideo.currentTime);
     }
   });
@@ -2106,13 +2129,11 @@ function onYtStateChange(state) {
   }
 
   // State 1 = playing, state 2 = paused.
-  // These can be triggered by YouTube's own overlay controls (the big play
-  // button that appears in the centre of the embed in some browsers/contexts)
-  // without going through our custom play/pause button. Broadcast the state
-  // change so the other peer stays in sync.
-  // The dedup window in sendPlayPauseCommand absorbs the echo that fires when
-  // OUR button causes ytPlayer.playVideo/pauseVideo which triggers this event.
-  if (!isWatchScreenActive() || !peerPresent) return;
+  // These can be triggered by YouTube's own overlay controls without going
+  // through our custom play/pause button. Broadcast so the peer stays in sync.
+  // syncEngineActing suppresses the broadcast when the sync engine triggered
+  // the state change — same ping-pong prevention as the local file listeners.
+  if (!isWatchScreenActive() || !peerPresent || syncEngineActing) return;
   if (state === 1) {
     sendPlayPauseCommand(true, ytCurrentTime);
   } else if (state === 2) {
