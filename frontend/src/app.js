@@ -91,6 +91,8 @@ let myFileName = null;
 let roomCode = null;
 let peerPresent = false;
 let createRoomPending = false;
+let peerLeftTimer = null;        // grace period before tearing down call on peer_left
+const PEER_LEFT_GRACE_MS = 9000; // 9s — enough for a WS reconnect on mobile
 let syncPlaybackRateTimer = null;
 let syncToastCooldownUntil = 0;
 let playbackRetryPending = false;
@@ -109,6 +111,19 @@ let trackRefreshTimeout = null;
 let localSubtitleTrackEl = null;
 let localSubtitleObjectUrl = null;
 let localSubtitleFileName = null;
+
+// ── YouTube mode state ────────────────────────────────────────────────────
+let roomMode        = 'local';  // 'local' | 'youtube'
+let ytVideoId       = null;     // current YouTube video ID
+let ytPlayer        = null;     // YT.Player instance
+let ytApiReady      = false;
+let ytPlayerReady   = false;
+let ytCurrentTime   = 0;
+let ytDuration      = 0;
+let ytIsPaused      = true;
+let ytPollingTimer  = null;
+let ytApiLoadPromise = null;
+let isSeeking       = false;    // moved to module level so ytPolling can read it
 
 const SOFT_SYNC_THRESHOLD_SEC = 0.8;
 const HARD_SYNC_THRESHOLD_SEC = 4;
@@ -254,6 +269,7 @@ function setSyncStatus(message, tone = 'idle') {
 }
 
 function getVideoDurationSec() {
+  if (roomMode === 'youtube') return (ytDuration > 0) ? ytDuration : null;
   return Number.isFinite(movieVideo.duration) ? movieVideo.duration : null;
 }
 
@@ -263,7 +279,7 @@ function clampVideoPosition(positionSec) {
   return durationSec == null ? safePosition : Math.min(safePosition, durationSec);
 }
 
-function isAtVideoEnd(positionSec = movieVideo.currentTime) {
+function isAtVideoEnd(positionSec = (roomMode === 'youtube' ? ytCurrentTime : movieVideo.currentTime)) {
   const durationSec = getVideoDurationSec();
   return durationSec != null && durationSec > 0 && positionSec >= durationSec - 0.25;
 }
@@ -478,7 +494,7 @@ function queueTrackControlRefresh() {
 function clearSyncPlaybackRate() {
   clearTimeout(syncPlaybackRateTimer);
   syncPlaybackRateTimer = null;
-  if (movieVideo.playbackRate !== 1) movieVideo.playbackRate = 1;
+  if (roomMode !== 'youtube' && movieVideo.playbackRate !== 1) movieVideo.playbackRate = 1;
 }
 
 function schedulePlaybackRateReset() {
@@ -523,6 +539,7 @@ function markPlaybackProgress({ rendered = false } = {}) {
 }
 
 function armRenderedFrameWatcher() {
+  if (roomMode === 'youtube') return;
   if (frameCallbackPending || typeof movieVideo.requestVideoFrameCallback !== 'function') return;
   if (!movieVideo.src) return;
   frameCallbackPending = true;
@@ -546,7 +563,8 @@ function isWatchScreenActive() {
 }
 
 function shouldSendSyncHeartbeat() {
-  return Boolean(client && peerPresent && movieVideo.src && isWatchScreenActive());
+  const hasSource = roomMode === 'youtube' ? !!ytVideoId : !!movieVideo.src;
+  return Boolean(client && peerPresent && hasSource && isWatchScreenActive());
 }
 
 function sendPlayPauseCommand(playing, positionSec) {
@@ -565,6 +583,10 @@ function sendPlayPauseCommand(playing, positionSec) {
 }
 
 async function ensureMoviePlaying({ source = 'sync', showHint = false } = {}) {
+  if (roomMode === 'youtube') {
+    if (ytPlayer && ytPlayerReady) { ytPlayer.playVideo(); ytIsPaused = false; }
+    return true;
+  }
   if (movieVideo.paused) {
     try {
       await movieVideo.play();
@@ -588,6 +610,11 @@ async function ensureMoviePlaying({ source = 'sync', showHint = false } = {}) {
 }
 
 function nudgePlaybackToward(targetPos, driftSec, signedDrift) {
+  if (roomMode === 'youtube') {
+    // YouTube's rate API is coarse — just hard-sync for large drifts
+    if (driftSec >= HARD_SYNC_THRESHOLD_SEC) applyHardSync({ targetPos, playing: true, announce: true, driftSec });
+    return;
+  }
   if (signedDrift > SOFT_SYNC_THRESHOLD_SEC) {
     movieVideo.playbackRate = FAST_CATCHUP_RATE;
     schedulePlaybackRateReset();
@@ -609,10 +636,15 @@ function nudgePlaybackToward(targetPos, driftSec, signedDrift) {
 function applyExplicitSeek(positionSec, { broadcast = true } = {}) {
   const targetPos = clampVideoPosition(positionSec);
   clearSyncPlaybackRate();
-  movieVideo.currentTime = targetPos;
-  rememberAuthoritativeSeek(targetPos, !movieVideo.paused);
-  markPlaybackProgress();
-  armRenderedFrameWatcher();
+  if (roomMode === 'youtube') {
+    ytPlayer?.seekTo(targetPos, true);
+    ytCurrentTime = targetPos;
+  } else {
+    movieVideo.currentTime = targetPos;
+    rememberAuthoritativeSeek(targetPos, !movieVideo.paused);
+    markPlaybackProgress();
+    armRenderedFrameWatcher();
+  }
   if (broadcast) client?.seek(targetPos);
 }
 
@@ -622,9 +654,14 @@ window.handleExplicitSeekChange = (positionSec) => {
 
 function applyHardSync({ targetPos, playing, announce = false, driftSec = 0 }) {
   clearSyncPlaybackRate();
-  movieVideo.currentTime = targetPos;
-  markPlaybackProgress();
-  armRenderedFrameWatcher();
+  if (roomMode === 'youtube') {
+    ytPlayer?.seekTo(targetPos, true);
+    ytCurrentTime = targetPos;
+  } else {
+    movieVideo.currentTime = targetPos;
+    markPlaybackProgress();
+    armRenderedFrameWatcher();
+  }
   if (announce) {
     maybeShowSyncToast(`Resyncing… (${driftSec.toFixed(1)}s drift)`, driftSec);
   }
@@ -632,13 +669,14 @@ function applyHardSync({ targetPos, playing, announce = false, driftSec = 0 }) {
   if (playing && !shouldPauseAtEnd) {
     ensureMoviePlaying({ source: 'hard-sync', showHint: true });
   } else {
-    movieVideo.pause();
+    if (roomMode === 'youtube') { ytPlayer?.pauseVideo(); ytIsPaused = true; }
+    else movieVideo.pause();
   }
 }
 
 async function handleSyncCorrection({ positionSec, playing, serverTs, drift, source = 'sync' }) {
   const targetPos = getCompensatedSyncPosition(positionSec, playing, serverTs);
-  const localPos = clampVideoPosition(movieVideo.currentTime);
+  const localPos = clampVideoPosition(roomMode === 'youtube' ? ytCurrentTime : movieVideo.currentTime);
   const signedDrift = targetPos - localPos;
   const driftSec = Math.abs(Number.isFinite(drift) ? drift : signedDrift);
   const shouldPauseAtEnd = isAtVideoEnd(targetPos);
@@ -665,8 +703,15 @@ async function handleSyncCorrection({ positionSec, playing, serverTs, drift, sou
 
   if (!playing) {
     clearSyncPlaybackRate();
-    if (Math.abs(signedDrift) > 0.15) movieVideo.currentTime = targetPos;
-    if (!movieVideo.paused) movieVideo.pause();
+    if (Math.abs(signedDrift) > 0.15) {
+      if (roomMode === 'youtube') { ytPlayer?.seekTo(targetPos, true); ytCurrentTime = targetPos; }
+      else movieVideo.currentTime = targetPos;
+    }
+    const isPaused = roomMode === 'youtube' ? ytIsPaused : movieVideo.paused;
+    if (!isPaused) {
+      if (roomMode === 'youtube') { ytPlayer?.pauseVideo(); ytIsPaused = true; }
+      else movieVideo.pause();
+    }
     return;
   }
 
@@ -680,14 +725,14 @@ async function handleSyncCorrection({ positionSec, playing, serverTs, drift, sou
     return;
   }
 
-  if (movieVideo.seeking) return;
+  if (roomMode !== 'youtube' && movieVideo.seeking) return;
 
   if (driftSec >= HARD_SYNC_THRESHOLD_SEC) {
     applyHardSync({ targetPos, playing: true, announce: true, driftSec });
     return;
   }
 
-  if (movieVideo.paused) {
+  if (roomMode === 'youtube' ? ytIsPaused : movieVideo.paused) {
     await ensureMoviePlaying({ source: 'sync-resume', showHint: true });
     return;
   }
@@ -702,16 +747,25 @@ async function handleSyncCorrection({ positionSec, playing, serverTs, drift, sou
 
 function leaveWatchToLobby({ clearFile = false, keepCall = true, notice = '' } = {}) {
   clearSyncPlaybackRate();
-  movieVideo.pause();
-  movieVideo.currentTime = 0;
+  if (roomMode === 'youtube') {
+    if (ytPlayer && ytPlayerReady) { ytPlayer.pauseVideo(); ytPlayer.seekTo(0, true); }
+    ytIsPaused = true; ytCurrentTime = 0;
+  } else {
+    movieVideo.pause();
+    movieVideo.currentTime = 0;
+  }
   if (clearFile) {
-    movieVideo.removeAttribute('src');
-    movieVideo.load();
-    myFileName = null;
-    if (fileInput) fileInput.value = '';
-    clearOwnFileSelection();
-    detachLocalSubtitleTrack();
-    resetTrackControls();
+    if (roomMode === 'youtube') {
+      clearYtVideoSelection();
+    } else {
+      movieVideo.removeAttribute('src');
+      movieVideo.load();
+      myFileName = null;
+      if (fileInput) fileInput.value = '';
+      clearOwnFileSelection();
+      detachLocalSubtitleTrack();
+      resetTrackControls();
+    }
   }
   if (!keepCall) {
     call?.end();
@@ -782,18 +836,29 @@ function resetToLanding(message = '') {
 
 function leaveRoomAndGoHome(message = '') {
   clearSyncPlaybackRate();
-  movieVideo.pause();
-  movieVideo.currentTime = 0;
-  movieVideo.removeAttribute('src');
-  movieVideo.load();
-  if (fileInput) fileInput.value = '';
-  clearOwnFileSelection();
-  detachLocalSubtitleTrack();
-  resetTrackControls();
+  if (roomMode === 'youtube') {
+    if (ytPlayer && ytPlayerReady) { ytPlayer.pauseVideo(); ytPlayer.seekTo(0, true); }
+    ytIsPaused = true; ytCurrentTime = 0;
+    clearYtVideoSelection();
+    stopYtPolling();
+    setRoomModeUI('local', false);
+  } else {
+    movieVideo.pause();
+    movieVideo.currentTime = 0;
+    movieVideo.removeAttribute('src');
+    movieVideo.load();
+    if (fileInput) fileInput.value = '';
+    clearOwnFileSelection();
+    detachLocalSubtitleTrack();
+    resetTrackControls();
+  }
   resetReadyState({ disable: true });
   setSyncStatus('Pick your video file to check for sync', 'idle');
+  clearTimeout(peerLeftTimer);
+  peerLeftTimer = null;
   call?.end();
   call = null;
+  callStarting = false;
   showCallUI(false);
   client?.disconnect();
   resetToLanding(message);
@@ -834,6 +899,7 @@ async function recoverFrozenPlayback(reason = 'watchdog') {
 }
 
 function checkPlaybackHealth() {
+  if (roomMode === 'youtube') return; // YouTube manages its own buffering
   if (!shouldMonitorPlaybackFreeze()) return;
 
   const activityAt =
@@ -911,6 +977,7 @@ async function connectAndJoin() {
   wireClientEvents();
   wireVideoControls();
   wireReactions();
+  wireYouTubeLobby();
 }
 
 async function autoJoinFromPath() {
@@ -967,41 +1034,95 @@ function wireClientEvents() {
       }
     });
     if (peerPresent) ensureVideoCall();
+    // Restore YouTube mode if room was already in YouTube mode when we joined
+    if (data.roomMode === 'youtube') {
+      setRoomModeUI('youtube', false);
+      if (data.youtubeVideoId) {
+        const ytInput = document.getElementById('yt-url-input');
+        if (ytInput) ytInput.value = `https://www.youtube.com/watch?v=${data.youtubeVideoId}`;
+        document.getElementById('yt-clear-btn')?.classList.add('show');
+        processYtUrl(data.youtubeVideoId).catch(console.warn);
+      }
+    }
   });
 
   client.on('peer_joined', (data) => {
     peerPresent = true;
-    showToast(`${data.name} joined the room 🎉`);
-    addPeerToUI(data);
+
+    // BUG FIX: if peer_left fired but the peer reconnected within the grace
+    // window, cancel the pending call teardown. This prevents the WS reconnect
+    // cycle (leave → rejoin within seconds) from destroying and rebuilding
+    // the entire WebRTC call every time.
+    if (peerLeftTimer) {
+      clearTimeout(peerLeftTimer);
+      peerLeftTimer = null;
+      // Peer is back — show reconnected toast instead of "joined" toast
+      showToast(`${data.name} reconnected 🔄`);
+      addPeerToUI(data);
+      // If the call was healthy and survived, just return; otherwise rebuild
+      if (call) return;
+    } else {
+      showToast(`${data.name} joined the room 🎉`);
+      addPeerToUI(data);
+    }
+
     ensureVideoCall();
   });
 
   client.on('peer_left', (data) => {
     peerPresent = false;
-    showToast(`${data.name} left the room`);
     removePeerFromUI(data.peerId);
-    call?.end();
-    call = null;
     clearSyncPlaybackRate();
-    // Video auto-pauses server-side; mirror it here
-    movieVideo.pause();
-    setSyncStatus('Waiting for your friend to join', 'idle');
+
+    // Pause playback immediately — but keep the call alive for now
+    if (roomMode === 'youtube') { if (ytPlayer && ytPlayerReady) { ytPlayer.pauseVideo(); ytIsPaused = true; } }
+    else movieVideo.pause();
+
+    // BUG FIX: don't tear down the WebRTC call immediately on peer_left.
+    // WebSocket drops are common on mobile / poor networks. The peer usually
+    // reconnects within 1-3 seconds via client.js auto-reconnect. If we
+    // destroy the call instantly, we pay the full ICE negotiation cost again
+    // every time — which is exactly what caused the endless leave/rejoin loop.
+    //
+    // Strategy: show a "reconnecting" toast and wait PEER_LEFT_GRACE_MS.
+    // If peer_joined fires within that window, we cancel the teardown.
+    // If the timer expires without them coming back, we accept they're gone.
+    clearTimeout(peerLeftTimer);
+    showToast(`${data.name} disconnected — waiting for reconnect…`);
+    setSyncStatus(`${data.name || 'Your friend'} disconnected — reconnecting…`, 'warn');
+
+    peerLeftTimer = setTimeout(() => {
+      peerLeftTimer = null;
+      // They didn't come back — do the full teardown now
+      showToast(`${data.name} left the room`);
+      call?.end();
+      call = null;
+      callStarting = false;
+      setSyncStatus('Waiting for your friend to join', 'idle');
+    }, PEER_LEFT_GRACE_MS);
   });
 
   // ── File loading ─────────────────────────────────────────────────────────
   client.on('peer_file_ready', (data) => {
-    updatePeerFileStatus(data.peerId, data.durationSec, data.fileName);
-    resetReadyState({ disable: true });
-    setSyncStatus(`${getPeerDisplayName()} changed their file. Re-check sync before starting.`, 'warn');
-    const fileLabel = data.fileName ? ` "${data.fileName}"` : '';
-    showToast(`${getPeerDisplayName()} picked a different file${fileLabel}`, 'info');
+    if (roomMode === 'youtube') {
+      // In YouTube mode peer_file_ready means friend loaded the shared video
+      const durEl = document.getElementById('friend-yt-dur');
+      if (durEl && data.durationSec) durEl.textContent = formatDur(data.durationSec);
+    } else {
+      updatePeerFileStatus(data.peerId, data.durationSec, data.fileName);
+      resetReadyState({ disable: true });
+      setSyncStatus(`${getPeerDisplayName()} changed their file. Re-check sync before starting.`, 'warn');
+      const fileLabel = data.fileName ? ` "${data.fileName}"` : '';
+      showToast(`${getPeerDisplayName()} picked a different file${fileLabel}`, 'info');
+    }
   });
 
   client.on('duration_check', ({ match, diff }) => {
     if (match) {
-      showToast('Files match ✓ — same movie confirmed', 'success');
-      readyBtn.disabled = false;
-      setSyncStatus('Files match. Both of you can get ready.', 'ok');
+      const msg = roomMode === 'youtube' ? 'Same video confirmed ✓ — ready to watch together' : 'Files match ✓ — same movie confirmed';
+      showToast(msg, 'success');
+      if (readyBtn) readyBtn.disabled = false;
+      setSyncStatus(roomMode === 'youtube' ? 'Video matched. Both of you can get ready.' : 'Files match. Both of you can get ready.', 'ok');
     } else {
       showToast(`Duration mismatch: ${diff.toFixed(1)}s difference — check your files`, 'warn');
       setSyncStatus(`Duration mismatch: ${diff.toFixed(1)}s difference — check your files`, 'warn');
@@ -1014,10 +1135,19 @@ function wireClientEvents() {
   });
 
   client.on('countdown_start', ({ positionSec }) => {
-    movieVideo.currentTime = positionSec;
+    if (roomMode === 'youtube') {
+      if (ytPlayer && ytPlayerReady) ytPlayer.seekTo(positionSec, true);
+      ytCurrentTime = positionSec;
+    } else {
+      movieVideo.currentTime = positionSec;
+    }
     startCountdown(() => {
       showWatchScreen();
       showCallUI(!!call);
+      if (roomMode === 'youtube') {
+        // The countdown overlay provides the user gesture that satisfies autoplay policy
+        setTimeout(() => { if (ytPlayer && ytPlayerReady) { ytPlayer.playVideo(); ytIsPaused = false; } }, 150);
+      }
     });
   });
 
@@ -1025,9 +1155,47 @@ function wireClientEvents() {
     leaveWatchToLobby({
       clearFile: false,
       keepCall: true,
-      notice: `${name || getPeerDisplayName()} went back to pick a different file.`
+      notice: roomMode === 'youtube'
+        ? `${name || getPeerDisplayName()} went back to change the video.`
+        : `${name || getPeerDisplayName()} went back to pick a different file.`,
     });
-    showToast(`${name || getPeerDisplayName()} went back to file selection`, 'info');
+    showToast(`${name || getPeerDisplayName()} went back to ${roomMode === 'youtube' ? 'change video' : 'file selection'}`, 'info');
+  });
+
+  // ── YouTube room-level events ──────────────────────────────────────────
+  client.on('peer_mode_change', ({ peerId, name, mode }) => {
+    if (mode === roomMode) return; // already in sync
+    setRoomModeUI(mode, false);   // apply without re-broadcasting
+    if (mode === 'youtube') {
+      clearYtVideoSelection();
+      updateFriendCardForMode('youtube');
+      setSyncStatus(`${name || 'Your friend'} switched to YouTube mode — paste the same link`, 'idle');
+      showToast(`${name || 'Your friend'} switched to YouTube mode`);
+    } else {
+      updateFriendCardForMode('local');
+      setSyncStatus('Your friend switched back to local file mode', 'idle');
+      showToast(`${name || 'Your friend'} switched to local file mode`);
+    }
+    resetReadyState({ disable: true });
+  });
+
+  client.on('peer_youtube_link', async ({ fromPeerId, videoId, title }) => {
+    if (!videoId) return;
+    const isMine = fromPeerId === client.peerId;
+    if (!isMine) {
+      // Friend shared the link — load it on our side too
+      updateFriendYtPreview(videoId, title);
+      setSyncStatus(`${getPeerDisplayName()} shared a YouTube video — loading…`, 'idle');
+      showToast(`${getPeerDisplayName()} shared: ${title || videoId}`, 'info');
+      const ytInput = document.getElementById('yt-url-input');
+      if (ytInput) { ytInput.value = `https://www.youtube.com/watch?v=${videoId}`; }
+      document.getElementById('yt-clear-btn')?.classList.add('show');
+      if (videoId !== ytVideoId) {
+        await processYtUrl(videoId).catch(err => console.warn('[YT] auto-load failed:', err));
+      }
+    }
+    resetReadyState({ disable: true });
+    client?.setReady(false);
   });
 
   // ── Playback sync ────────────────────────────────────────────────────────
@@ -1065,9 +1233,10 @@ function wireClientEvents() {
 // ═════════════════════════════════════════════════════════════════════════════
 
 function wireVideoControls() {
-  client.setPositionGetter(() => (
-    shouldSendSyncHeartbeat() ? clampVideoPosition(movieVideo.currentTime) : null
-  ));
+  client.setPositionGetter(() => {
+    if (!shouldSendSyncHeartbeat()) return null;
+    return clampVideoPosition(roomMode === 'youtube' ? ytCurrentTime : movieVideo.currentTime);
+  });
   if (videoControlsWired) return;
   videoControlsWired = true;
   playbackHealthTimer = window.setInterval(checkPlaybackHealth, 1000);
@@ -1125,13 +1294,16 @@ function wireVideoControls() {
 
   // ── Play / Pause ─────────────────────────────────────────────────────────
   playPauseBtn?.addEventListener('click', () => {
-    const nowPlaying = !movieVideo.paused;
+    const nowPlaying = roomMode === 'youtube' ? !ytIsPaused : !movieVideo.paused;
+    const pos        = roomMode === 'youtube' ? ytCurrentTime : movieVideo.currentTime;
     clearSyncPlaybackRate();
-    // Toggle locally first for snappy feel
-    if (nowPlaying) movieVideo.pause();
-    else            ensureMoviePlaying({ source: 'local-control', showHint: true });
-    // Tell server/peer (we become master for this action)
-    sendPlayPauseCommand(!nowPlaying, movieVideo.currentTime);
+    if (nowPlaying) {
+      if (roomMode === 'youtube') { ytPlayer?.pauseVideo(); ytIsPaused = true; }
+      else movieVideo.pause();
+    } else {
+      ensureMoviePlaying({ source: 'local-control', showHint: true });
+    }
+    sendPlayPauseCommand(!nowPlaying, pos);
   });
 
   // Keyboard shortcut: space bar
@@ -1168,7 +1340,7 @@ function wireVideoControls() {
   });
 
   // ── Seek bar ─────────────────────────────────────────────────────────────
-  let isSeeking = false;
+  // isSeeking is now module-level (declared at top)
   let lastCommittedSeekValue = null;
   let lastCommittedSeekAt = 0;
 
@@ -1176,7 +1348,7 @@ function wireVideoControls() {
     if (!seekBar) return;
     const targetPos = clampVideoPosition(Number(seekBar.value));
     const now = Date.now();
-    isSeeking = false;
+    isSeeking = false; window._isSeeking = false;
     if (
       lastCommittedSeekValue != null &&
       Math.abs(targetPos - lastCommittedSeekValue) < 0.01 &&
@@ -1189,13 +1361,15 @@ function wireVideoControls() {
     applyExplicitSeek(targetPos);
   };
 
-  seekBar?.addEventListener('pointerdown', () => { isSeeking = true; });
-  seekBar?.addEventListener('mousedown', () => { isSeeking = true; });
-  seekBar?.addEventListener('touchstart', () => { isSeeking = true; }, { passive: true });
+  seekBar?.addEventListener('pointerdown', () => { isSeeking = true; window._isSeeking = true; });
+  seekBar?.addEventListener('mousedown', () => { isSeeking = true; window._isSeeking = true; });
+  seekBar?.addEventListener('touchstart', () => { isSeeking = true; window._isSeeking = true; }, { passive: true });
 
   seekBar?.addEventListener('input', () => {
     clearSyncPlaybackRate();
-    movieVideo.currentTime = Number(seekBar.value);
+    const v = Number(seekBar.value);
+    if (roomMode === 'youtube') { ytPlayer?.seekTo(v, true); ytCurrentTime = v; }
+    else movieVideo.currentTime = v;
   });
 
   seekBar?.addEventListener('change', commitSeekBarChange);
@@ -1314,6 +1488,9 @@ async function startVideoCall() {
     .on('camera_unavailable', () => {
       showToast('Camera not available — audio only');
     })
+    .on('ice_failed', () => {
+      showToast('Video call could not connect — network may be blocking P2P. Try a different network.', 'warn');
+    })
     .on('ended', () => {
       if (remoteCamOff) remoteCamOff.style.display = 'none';
       showCallUI(false);
@@ -1362,7 +1539,7 @@ watchBackBtn?.addEventListener('click', () => {
   leaveWatchToLobby({
     clearFile: true,
     keepCall: true,
-    notice: 'Pick your video file to check for sync'
+    notice: roomMode === 'youtube' ? 'Paste a YouTube link to start' : 'Pick your video file to check for sync',
   });
 });
 
@@ -1605,6 +1782,324 @@ function formatDur(sec) {
 const style = document.createElement('style');
 style.textContent = `@keyframes floatUp { from { opacity:1; transform:translateY(0) scale(1); } to { opacity:0; transform:translateY(-160px) scale(1.5); } }`;
 document.head.appendChild(style);
+
+// ═════════════════════════════════════════════════════════════════════════════
+// 7. YOUTUBE MODE
+// ═════════════════════════════════════════════════════════════════════════════
+
+// Expose global helpers used by the inline script in index.html
+window.handleSkip = (deltaSec) => {
+  const cur = roomMode === 'youtube' ? ytCurrentTime : movieVideo.currentTime;
+  const dur = roomMode === 'youtube' ? ytDuration    : (movieVideo.duration || Infinity);
+  const next = Math.max(0, Math.min(isFinite(dur) ? dur : 1e9, cur + deltaSec));
+  applyExplicitSeek(next);
+};
+
+window.handleVolumeChange = (v) => {
+  if (roomMode === 'youtube') ytPlayer?.setVolume(Math.round(v * 100));
+  else movieVideo.volume = v;
+};
+
+// ── YouTube IFrame API loading ────────────────────────────────────────────
+function loadYouTubeAPI() {
+  if (ytApiLoadPromise) return ytApiLoadPromise;
+  ytApiLoadPromise = new Promise(resolve => {
+    if (window.YT?.Player) { ytApiReady = true; resolve(); return; }
+    const tag = document.createElement('script');
+    tag.src   = 'https://www.youtube.com/iframe_api';
+    document.head.appendChild(tag);
+    const prev = window.onYouTubeIframeAPIReady;
+    window.onYouTubeIframeAPIReady = () => { ytApiReady = true; prev?.(); resolve(); };
+  });
+  return ytApiLoadPromise;
+}
+
+// ── YouTube player creation / reuse ───────────────────────────────────────
+async function initYtPlayer(videoId) {
+  await loadYouTubeAPI();
+  if (ytPlayer && ytPlayerReady) {
+    // Reuse existing player — just load new video
+    ytPlayer.loadVideoById({ videoId, suggestedQuality: 'default' });
+    ytVideoId     = videoId;
+    ytCurrentTime = 0;
+    // getDuration may not be available immediately after load; poll for it
+    let attempts = 0;
+    await new Promise(res => {
+      const poll = setInterval(() => {
+        const d = ytPlayer.getDuration?.() ?? 0;
+        if (d > 0 || ++attempts > 20) { clearInterval(poll); ytDuration = d; res(); }
+      }, 200);
+    });
+    return;
+  }
+  // First-time player creation
+  return new Promise((resolve, reject) => {
+    ytPlayerReady = false;
+    ytPlayer = new window.YT.Player('yt-player', {
+      videoId,
+      playerVars: {
+        autoplay:        0,
+        controls:        0,  // we use our own controls
+        disablekb:       1,
+        modestbranding:  1,
+        rel:             0,
+        iv_load_policy:  3,
+        playsinline:     1,
+        enablejsapi:     1,
+        origin:          window.location.origin,
+      },
+      events: {
+        onReady(e) {
+          ytPlayerReady = true;
+          ytVideoId     = videoId;
+          ytDuration    = e.target.getDuration?.() ?? 0;
+          startYtPolling();
+          resolve();
+        },
+        onStateChange(e) { onYtStateChange(e.data); },
+        onError(e) {
+          console.error('[YT] Player error code:', e.data);
+          showToast('YouTube video unavailable or restricted', 'warn');
+          reject(new Error('YT error ' + e.data));
+        },
+      },
+    });
+  });
+}
+
+function onYtStateChange(state) {
+  // YT.PlayerState: -1 unstarted | 0 ended | 1 playing | 2 paused | 3 buffering | 5 cued
+  const nowPaused  = state !== 1;
+  const wasPlaying = !ytIsPaused;
+  ytIsPaused = nowPaused;
+  window.ytPlayStateUpdate?.(state === 1);
+  if (state === 0 && wasPlaying) {
+    // Video ended — tell the other peer to pause
+    sendPlayPauseCommand(false, ytDuration || ytCurrentTime);
+  }
+}
+
+function startYtPolling() {
+  stopYtPolling();
+  ytPollingTimer = setInterval(() => {
+    if (!ytPlayer || !ytPlayerReady) return;
+    const t = ytPlayer.getCurrentTime?.() ?? 0;
+    const d = ytPlayer.getDuration?.() ?? 0;
+    ytCurrentTime = t;
+    if (d > 0) ytDuration = d;
+    window.ytTimeUpdate?.(t, d || ytDuration);
+  }, 250);
+}
+
+function stopYtPolling() {
+  if (ytPollingTimer) { clearInterval(ytPollingTimer); ytPollingTimer = null; }
+}
+
+// ── URL parsing + oEmbed fetch ────────────────────────────────────────────
+function parseYouTubeId(url) {
+  const str = String(url || '').trim();
+  for (const p of [
+    /[?&]v=([A-Za-z0-9_-]{11})/,
+    /youtu\.be\/([A-Za-z0-9_-]{11})/,
+    /shorts\/([A-Za-z0-9_-]{11})/,
+    /embed\/([A-Za-z0-9_-]{11})/,
+  ]) {
+    const m = str.match(p); if (m) return m[1];
+  }
+  return null;
+}
+
+async function fetchYtInfo(videoId) {
+  const url = `https://www.youtube.com/oembed?url=https://www.youtube.com/watch?v=${videoId}&format=json`;
+  const res = await fetch(url);
+  if (!res.ok) throw new Error('Video not found or private');
+  return res.json(); // { title, thumbnail_url }
+}
+
+// ── Clear YouTube selection ───────────────────────────────────────────────
+function clearYtVideoSelection() {
+  ytVideoId = null; ytDuration = 0; ytCurrentTime = 0;
+  const inp  = document.getElementById('yt-url-input');
+  const prev = document.getElementById('yt-preview');
+  const load = document.getElementById('yt-loading');
+  const clr  = document.getElementById('yt-clear-btn');
+  if (inp)  inp.value = '';
+  if (prev) prev.classList.remove('show');
+  if (load) load.classList.remove('show');
+  if (clr)  clr.classList.remove('show');
+}
+
+// ── Mode UI switching ─────────────────────────────────────────────────────
+function setRoomModeUI(mode, sendWs = true) {
+  roomMode = mode;
+  const localPanel = document.getElementById('local-src-panel');
+  const ytPanel    = document.getElementById('yt-src-panel');
+  const localBtn   = document.getElementById('mode-local-btn');
+  const ytBtn      = document.getElementById('mode-yt-btn');
+  const movieEl    = document.getElementById('movie-video');
+  const ytWrap     = document.getElementById('yt-player-wrap');
+  const backBtn    = document.getElementById('watch-back-btn');
+  window._ytMode   = (mode === 'youtube');
+
+  if (mode === 'youtube') {
+    localPanel?.classList.add('hidden');
+    ytPanel?.classList.remove('hidden');
+    localBtn?.classList.remove('active');
+    ytBtn?.classList.add('active');
+    if (movieEl) movieEl.style.display = 'none';
+    if (ytWrap)  ytWrap.classList.add('active');
+    if (backBtn) backBtn.textContent = '← Change video';
+    loadYouTubeAPI(); // pre-fetch API script while user is still in lobby
+  } else {
+    localPanel?.classList.remove('hidden');
+    ytPanel?.classList.add('hidden');
+    localBtn?.classList.add('active');
+    ytBtn?.classList.remove('active');
+    if (movieEl) movieEl.style.removeProperty('display');
+    if (ytWrap)  ytWrap.classList.remove('active');
+    if (backBtn) backBtn.textContent = '← Change file';
+  }
+
+  resetReadyState({ disable: true });
+  client?.setReady(false);
+  if (sendWs && client) client._send('mode_change', { mode });
+}
+
+// ── Friend card dynamic content ───────────────────────────────────────────
+function updateFriendCardForMode(mode) {
+  const section = document.getElementById('friend-file-section');
+  if (!section) return;
+  if (mode === 'youtube') {
+    section.innerHTML = `
+      <div class="yt-section">
+        <div class="yt-preview" id="friend-yt-preview">
+          <img class="yt-thumb" id="friend-yt-thumb" src="" alt=""/>
+          <div class="yt-info">
+            <div class="yt-title" id="friend-yt-title">Waiting for YouTube link…</div>
+            <div class="yt-dur" id="friend-yt-dur"></div>
+          </div>
+        </div>
+      </div>`;
+  } else {
+    section.innerHTML = `
+      <div class="file-drop" style="pointer-events:none;">
+        <div class="fd-icon">🌙</div>
+        <div class="fd-label" id="friend-file-label">Waiting for<br>your friend to join</div>
+      </div>`;
+  }
+}
+
+function updateFriendYtPreview(videoId, title) {
+  const section = document.getElementById('friend-file-section');
+  // Ensure YouTube DOM structure exists in friend card
+  if (!document.getElementById('friend-yt-preview')) {
+    updateFriendCardForMode('youtube');
+  }
+  const thumbEl = document.getElementById('friend-yt-thumb');
+  const titleEl = document.getElementById('friend-yt-title');
+  const prevEl  = document.getElementById('friend-yt-preview');
+  if (thumbEl) thumbEl.src = `https://img.youtube.com/vi/${videoId}/mqdefault.jpg`;
+  if (titleEl) titleEl.textContent = title || 'YouTube Video';
+  if (prevEl)  prevEl.classList.add('show');
+}
+
+// ── Wire lobby toggle + URL input ─────────────────────────────────────────
+let ytLobbyWired = false;
+function wireYouTubeLobby() {
+  if (ytLobbyWired) return;
+  ytLobbyWired = true;
+
+  const toggle  = document.getElementById('mode-toggle');
+  const ytInput = document.getElementById('yt-url-input');
+  const ytClear = document.getElementById('yt-clear-btn');
+
+  toggle?.addEventListener('click', e => {
+    const btn = e.target.closest('.mode-btn');
+    if (!btn) return;
+    const targetMode = btn.dataset.mode;
+    if (targetMode === roomMode) return;
+    if (targetMode === 'local') clearYtVideoSelection();
+    setRoomModeUI(targetMode, true);
+    setSyncStatus(
+      targetMode === 'youtube'
+        ? 'Paste a YouTube link to watch together'
+        : 'Pick your video file to check for sync',
+      'idle'
+    );
+  });
+
+  let ytDebounce = null;
+  ytInput?.addEventListener('input', () => {
+    const val = ytInput.value.trim();
+    ytClear?.classList.toggle('show', val.length > 0);
+    clearTimeout(ytDebounce);
+    if (!val) {
+      document.getElementById('yt-preview')?.classList.remove('show');
+      document.getElementById('yt-loading')?.classList.remove('show');
+      return;
+    }
+    const id = parseYouTubeId(val);
+    if (!id) return;
+    ytDebounce = setTimeout(() => processYtUrl(id), 700);
+  });
+
+  ytInput?.addEventListener('paste', e => {
+    // Run after the paste has updated the input value
+    setTimeout(() => {
+      const id = parseYouTubeId(e.target.value || '');
+      if (id) processYtUrl(id);
+    }, 60);
+  });
+
+  ytClear?.addEventListener('click', () => {
+    clearYtVideoSelection();
+    resetReadyState({ disable: true });
+    setSyncStatus('Paste a YouTube link to watch together', 'idle');
+  });
+}
+
+// ── Process a YouTube video ID: fetch info → create player → broadcast ────
+async function processYtUrl(videoId) {
+  if (videoId === ytVideoId && ytPlayerReady) return; // already loaded
+  const loadEl  = document.getElementById('yt-loading');
+  const prevEl  = document.getElementById('yt-preview');
+  const thumbEl = document.getElementById('yt-thumb');
+  const titleEl = document.getElementById('yt-title');
+  const durEl   = document.getElementById('yt-dur');
+  const clrBtn  = document.getElementById('yt-clear-btn');
+
+  prevEl?.classList.remove('show');
+  if (loadEl) { loadEl.textContent = 'Fetching video info…'; loadEl.classList.add('show'); }
+
+  try {
+    const info = await fetchYtInfo(videoId);
+    loadEl?.classList.remove('show');
+
+    if (thumbEl) thumbEl.src = info.thumbnail_url || `https://img.youtube.com/vi/${videoId}/mqdefault.jpg`;
+    if (titleEl) titleEl.textContent = info.title || 'YouTube Video';
+    if (durEl)   durEl.textContent   = '';
+    prevEl?.classList.add('show');
+    ytVideoId = videoId;
+
+    setSyncStatus('Loading YouTube player…', 'idle');
+    await initYtPlayer(videoId);
+    if (durEl && ytDuration > 0) durEl.textContent = formatDur(ytDuration);
+
+    // Broadcast the link to the other peer
+    client?._send('youtube_link', { videoId, title: info.title || 'YouTube Video' });
+    // Report our own duration through the existing file_ready mechanism
+    client?.fileReady(ytDuration, info.title || videoId);
+
+    setSyncStatus('Waiting for your friend to load the same video', 'idle');
+    resetReadyState({ disable: true });
+  } catch (err) {
+    console.error('[YT] processYtUrl failed:', err);
+    loadEl?.classList.remove('show');
+    prevEl?.classList.remove('show');
+    showToast(err.message || 'Could not load YouTube video', 'warn');
+    ytVideoId = null;
+  }
+}
 
 void wakeBackend();
 autoJoinFromPath();

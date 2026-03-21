@@ -86,6 +86,7 @@ export class VideoCall extends EventTarget {
     // concurrent offers corrupt the PC signalingState → ICE never connects
     // → remote video stays blank forever.
     this._makingOffer = false;
+    this._iceRestartCount = 0;  // cap restart attempts to prevent infinite loops
 
     // Wire incoming signals
     this._unsubscribeClientEvents.push(
@@ -258,6 +259,7 @@ export class VideoCall extends EventTarget {
     this._videoSender = null;
     this._audioSender = null;
     this._makingOffer = false;
+    this._iceRestartCount = 0;
     this._cameraSwitching = false;
     this._cameraEnabled   = true;
     this._remotePlayBlocked = false;
@@ -372,6 +374,7 @@ export class VideoCall extends EventTarget {
       if (state === 'connected' || state === 'completed') {
         clearTimeout(this._disconnectTimer);
         this._disconnectTimer = null;
+        this._iceRestartCount = 0; // successful connection — reset counter
         this._emit('connected');
       } else if (state === 'failed') {
         console.warn('[WebRTC] ICE failed — attempting restart');
@@ -517,19 +520,31 @@ export class VideoCall extends EventTarget {
   }
 
   async _iceRestart() {
-    // BUG FIX: old code sent both a new offer AND a separate 'ice_restart'
-    // signal. The signal caused the peer to also create an offer — offer
-    // collision. Now we just send a new offer with iceRestart:true.
-    // Only the initiator creates the restart offer; the non-initiator will
-    // receive it as a normal 'offer' signal and answer it.
     if (!this.pc || !this.isInitiator) return;
+
+    // BUG FIX: cap restart attempts. Without this, the watchdog would trigger
+    // _iceRestart, which re-armed the watchdog, which triggered another restart
+    // in 5s — an infinite loop visible as 20+ "Remote stream missing" lines.
+    // After MAX_RESTARTS failures we give up and emit 'failed' so the UI can
+    // show a clear message rather than silently looping forever.
+    const MAX_RESTARTS = 4;
+    this._iceRestartCount = (this._iceRestartCount || 0) + 1;
+    if (this._iceRestartCount > MAX_RESTARTS) {
+      console.warn(`[WebRTC] Gave up after ${MAX_RESTARTS} ICE restarts — network may be blocked`);
+      this._emit('ice_failed');
+      return;
+    }
+
     try {
       this._makingOffer = true;
       const offer = await this.pc.createOffer({ iceRestart: true });
       await this.pc.setLocalDescription(offer);
       this.client.sendSignal({ type: 'offer', sdp: offer });
-      this._armRemoteStreamWatchdog();
-      console.log('[WebRTC] ICE restart offer sent');
+      // BUG FIX: do NOT re-arm the watchdog here. The watchdog is already
+      // re-armed by oniceconnectionstatechange → 'checking', which fires as
+      // soon as ICE starts negotiating. Re-arming here caused the infinite
+      // loop: watchdog → restart → re-arm watchdog → restart → ...
+      console.log(`[WebRTC] ICE restart offer sent (attempt ${this._iceRestartCount}/${MAX_RESTARTS})`);
     } catch (err) {
       console.error('[WebRTC] ICE restart failed:', err);
     } finally {
@@ -578,7 +593,11 @@ export class VideoCall extends EventTarget {
         console.warn('[WebRTC] Remote stream missing after timeout — retrying negotiation');
         this._iceRestart();
       }
-    }, 5000);
+    // BUG FIX: was 5000ms — too short for cross-network ICE gathering which
+    // can take 8-15s through different NATs. Firing at 5s would restart the
+    // negotiation while ICE was still in progress, cancelling a connection
+    // that would have succeeded on its own in a few more seconds.
+    }, 15000);
   }
 
   _emit(type, detail = {}) {
@@ -589,4 +608,7 @@ export class VideoCall extends EventTarget {
     this.addEventListener(type, (e) => handler(e.detail ?? {}));
     return this;
   }
+  // Events: started, show_pip, connected, remote_stream, remote_camera_off,
+  //   remote_camera_on, peer_disconnected, mute_changed, camera_changed,
+  //   camera_unavailable, media_unavailable, ice_state, ice_failed, ended
 }

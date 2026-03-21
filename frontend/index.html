@@ -369,6 +369,42 @@ input[type=range]#seek-bar::-webkit-slider-thumb{appearance:none;width:14px;heig
   100%{background-position:-200% center;}
 }
 
+
+/* ── Mode toggle (local file ↔ YouTube) ─────────────────────────────────── */
+.mode-toggle{display:flex;align-items:center;background:var(--bg3);border:1px solid rgba(255,255,255,.07);border-radius:999px;padding:3px;gap:2px;margin-bottom:2px;}
+.mode-btn{display:flex;align-items:center;gap:5px;padding:6px 11px;border:none;border-radius:999px;font-family:'Nunito',sans-serif;font-size:11.5px;font-weight:700;cursor:pointer;transition:background .2s,color .2s,box-shadow .2s;color:var(--text3);background:transparent;white-space:nowrap;line-height:1;}
+.mode-btn svg{flex-shrink:0;}
+.mode-btn.active{background:var(--bg2);color:var(--text);box-shadow:0 1px 6px rgba(0,0,0,.3);}
+.mode-btn.active.yt-mode{color:#ff5555;}
+
+/* ── YouTube link input + preview card ──────────────────────────────────── */
+.yt-section{display:flex;flex-direction:column;gap:8px;}
+.yt-input-wrap{display:flex;align-items:center;background:var(--bg3);border:1.5px solid rgba(255,255,255,.07);border-radius:12px;overflow:hidden;transition:border-color .2s;}
+.yt-input-wrap:focus-within{border-color:rgba(255,68,68,.45);}
+.yt-input-icon{padding:0 8px 0 11px;color:rgba(255,68,68,.7);display:flex;align-items:center;flex-shrink:0;}
+.yt-url-input{flex:1;padding:11px 6px 11px 0;background:transparent;border:none;font-family:'Nunito',sans-serif;font-size:12.5px;color:var(--text);outline:none;}
+.yt-url-input::placeholder{color:var(--text3);font-size:11.5px;}
+.yt-clear-btn{padding:0 11px;background:none;border:none;color:var(--text3);cursor:pointer;font-size:18px;line-height:1;display:none;align-items:center;transition:color .15s;}
+.yt-clear-btn.show{display:flex;}
+.yt-clear-btn:hover{color:var(--text);}
+.yt-loading{display:none;font-size:11.5px;color:var(--text3);text-align:center;padding:6px 0;}
+.yt-loading.show{display:block;}
+.yt-preview{border-radius:10px;overflow:hidden;border:1px solid rgba(255,255,255,.06);background:rgba(15,20,25,.54);display:none;}
+.yt-preview.show{display:block;animation:ytFadeIn .2s ease;}
+@keyframes ytFadeIn{from{opacity:0;transform:translateY(3px)}to{opacity:1;transform:none}}
+.yt-thumb{width:100%;aspect-ratio:16/9;object-fit:cover;display:block;background:var(--bg3);}
+.yt-info{padding:8px 10px;display:flex;flex-direction:column;gap:3px;}
+.yt-title{font-size:12px;font-weight:700;color:var(--text);line-height:1.4;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;}
+.yt-dur{font-family:'Space Grotesk',monospace;color:var(--green);font-size:11px;}
+
+/* source panel hide/show */
+.src-panel.hidden{display:none;}
+
+/* ── YouTube IFrame player (watch screen) ────────────────────────────────── */
+#yt-player-wrap{position:absolute;inset:0;z-index:1;background:#000;display:none;pointer-events:all;}
+#yt-player-wrap.active{display:block;}
+#yt-player{width:100%;height:100%;}
+
 </style>
 </head>
 <body>
@@ -495,20 +531,54 @@ input[type=range]#seek-bar::-webkit-slider-thumb{appearance:none;width:14px;heig
     <!-- You -->
     <div class="player-card you">
       <div class="ptag pmyself">You</div>
-      <div class="pav pav-you" id="your-avatar">YO</div>
-      <div class="pname" id="your-name">You</div>
-      <div class="file-drop" id="your-file-drop">
-        <input type="file" id="file-input" accept="video/*"/>
-        <div class="fd-icon">🎬</div>
-        <div class="fd-label" id="your-file-label">Tap to pick<br>your video file</div>
+      <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;">
+        <div class="pav pav-you" id="your-avatar">YO</div>
+        <div class="mode-toggle" id="mode-toggle">
+          <button class="mode-btn active" id="mode-local-btn" data-mode="local" title="Local video file">
+            <svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor"><path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8l-6-6zm4 18H6V4h7v5h5v11z"/></svg>
+            File
+          </button>
+          <button class="mode-btn yt-mode" id="mode-yt-btn" data-mode="youtube" title="YouTube video">
+            <svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor"><path d="M21.58 7.19a2.76 2.76 0 00-1.94-1.95C18.01 5 12 5 12 5s-6.01 0-7.64.24A2.76 2.76 0 002.42 7.19 28.89 28.89 0 002 12a28.89 28.89 0 00.42 4.81 2.76 2.76 0 001.94 1.95C5.99 19 12 19 12 19s6.01 0 7.64-.24a2.76 2.76 0 001.94-1.95A28.89 28.89 0 0022 12a28.89 28.89 0 00-.42-4.81zM10 15V9l5.2 3L10 15z"/></svg>
+            YouTube
+          </button>
+        </div>
       </div>
-      <div class="media-tools">
-        <label class="aux-picker" id="subtitle-picker">
-          <input type="file" id="subtitle-input" accept=".vtt,.srt,text/vtt,application/x-subrip"/>
-          <span class="aux-picker-title">Optional captions</span>
-          <span class="aux-picker-meta" id="subtitle-file-label">Add your own local .srt or .vtt file</span>
-        </label>
-        <button class="aux-clear" id="subtitle-clear-btn" type="button" disabled>Clear captions</button>
+      <!-- Local file panel (default) -->
+      <div class="src-panel" id="local-src-panel">
+        <div class="file-drop" id="your-file-drop">
+          <input type="file" id="file-input" accept="video/*"/>
+          <div class="fd-icon">🎬</div>
+          <div class="fd-label" id="your-file-label">Tap to pick<br>your video file</div>
+        </div>
+        <div class="media-tools">
+          <label class="aux-picker" id="subtitle-picker">
+            <input type="file" id="subtitle-input" accept=".vtt,.srt,text/vtt,application/x-subrip"/>
+            <span class="aux-picker-title">Optional captions</span>
+            <span class="aux-picker-meta" id="subtitle-file-label">Add your own local .srt or .vtt file</span>
+          </label>
+          <button class="aux-clear" id="subtitle-clear-btn" type="button" disabled>Clear captions</button>
+        </div>
+      </div>
+      <!-- YouTube panel (hidden by default) -->
+      <div class="src-panel hidden" id="yt-src-panel">
+        <div class="yt-section">
+          <div class="yt-input-wrap">
+            <div class="yt-input-icon">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><path d="M21.58 7.19a2.76 2.76 0 00-1.94-1.95C18.01 5 12 5 12 5s-6.01 0-7.64.24A2.76 2.76 0 002.42 7.19 28.89 28.89 0 002 12a28.89 28.89 0 00.42 4.81 2.76 2.76 0 001.94 1.95C5.99 19 12 19 12 19s6.01 0 7.64-.24a2.76 2.76 0 001.94-1.95A28.89 28.89 0 0022 12a28.89 28.89 0 00-.42-4.81zM10 15V9l5.2 3L10 15z"/></svg>
+            </div>
+            <input class="yt-url-input" id="yt-url-input" placeholder="Paste a YouTube link…" type="url" autocomplete="off"/>
+            <button class="yt-clear-btn" id="yt-clear-btn" type="button" aria-label="Clear">×</button>
+          </div>
+          <div class="yt-loading" id="yt-loading">Fetching video info…</div>
+          <div class="yt-preview" id="yt-preview">
+            <img class="yt-thumb" id="yt-thumb" src="" alt=""/>
+            <div class="yt-info">
+              <div class="yt-title" id="yt-title"></div>
+              <div class="yt-dur" id="yt-dur"></div>
+            </div>
+          </div>
+        </div>
       </div>
     </div>
     <!-- Friend -->
@@ -516,9 +586,11 @@ input[type=range]#seek-bar::-webkit-slider-thumb{appearance:none;width:14px;heig
       <div class="ptag pfriend">Friend</div>
       <div class="pav pav-them" id="friend-avatar">?</div>
       <div class="pname pname-wait" id="friend-name">Waiting…</div>
-      <div class="file-drop" style="pointer-events:none;">
-        <div class="fd-icon">🌙</div>
-        <div class="fd-label" id="friend-file-label">Waiting for<br>your friend to join</div>
+      <div id="friend-file-section">
+        <div class="file-drop" style="pointer-events:none;">
+          <div class="fd-icon">🌙</div>
+          <div class="fd-label" id="friend-file-label">Waiting for<br>your friend to join</div>
+        </div>
       </div>
     </div>
   </div>
@@ -538,6 +610,10 @@ input[type=range]#seek-bar::-webkit-slider-thumb{appearance:none;width:14px;heig
 
   <!-- Actual movie -->
   <video id="movie-video" preload="metadata"></video>
+  <!-- YouTube player (active in youtube mode) -->
+  <div id="yt-player-wrap">
+    <div id="yt-player"></div>
+  </div>
 
   <!-- Sync toast -->
   <div class="sync-toast" id="sync-toast"></div>
@@ -669,8 +745,11 @@ input[type=range]#seek-bar::-webkit-slider-thumb{appearance:none;width:14px;heig
   mov.addEventListener('play',  () => ppIcon.innerHTML = PAUSE_PATH);
   mov.addEventListener('pause', () => ppIcon.innerHTML = PLAY_PATH);
 
-  // Volume
-  document.getElementById('volume-slider').addEventListener('input', e => { mov.volume = e.target.value; });
+  // Volume — delegates to app.js in YouTube mode
+  document.getElementById('volume-slider').addEventListener('input', e => {
+    if (window.handleVolumeChange) { window.handleVolumeChange(+e.target.value); return; }
+    mov.volume = e.target.value;
+  });
 
   // Fullscreen
   document.getElementById('fullscreen-btn').addEventListener('click', () => {
@@ -681,13 +760,15 @@ input[type=range]#seek-bar::-webkit-slider-thumb{appearance:none;width:14px;heig
     else document.exitFullscreen?.();
   });
 
-  // Skip ±10s
+  // Skip ±10s — delegates to app.js handler in YouTube mode
   document.getElementById('skip-back-btn').addEventListener('click', () => {
+    if (window.handleSkip) { window.handleSkip(-10); return; }
     const nextPos = Math.max(0, mov.currentTime - 10);
     mov.currentTime = nextPos;
     window.handleExplicitSeekChange?.(nextPos);
   });
   document.getElementById('skip-fwd-btn').addEventListener('click', () => {
+    if (window.handleSkip) { window.handleSkip(10); return; }
     const nextPos = Math.min(mov.duration || Infinity, mov.currentTime + 10);
     mov.currentTime = nextPos;
     window.handleExplicitSeekChange?.(nextPos);
@@ -1026,6 +1107,22 @@ input[type=range]#seek-bar::-webkit-slider-thumb{appearance:none;width:14px;heig
   document.addEventListener('pointerleave', () => {
     particleMouse.active = false;
   });
+
+  // ── YouTube time + play-state callbacks (called from app.js polling) ────
+  window.ytTimeUpdate = function(t, d) {
+    if (!document.getElementById('screen-watch')?.classList.contains('active')) return;
+    tcur.textContent = fmt(t);
+    const sb = document.getElementById('seek-bar');
+    if (sb) {
+      sb.style.setProperty('--pct', d > 0 ? (t/d*100)+'%' : '0%');
+      if (!window._isSeeking) sb.value = t;
+      if (d > 0 && Number(sb.max) !== d) sb.max = d;
+    }
+    if (d > 0) ttot.textContent = fmt(d);
+  };
+  window.ytPlayStateUpdate = function(playing) {
+    ppIcon.innerHTML = playing ? PAUSE_PATH : PLAY_PATH;
+  };
 
   function fmt(s){if(!s||isNaN(s))return'0:00:00';const h=Math.floor(s/3600),m=Math.floor((s%3600)/60),sc=Math.floor(s%60);return h+':'+String(m).padStart(2,'0')+':'+String(sc).padStart(2,'0');}
 </script>

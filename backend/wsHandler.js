@@ -38,11 +38,14 @@ function roomSnapshot(room, forPeerId) {
     });
   });
   return {
-    roomCode:   room.code,
+    roomCode:      room.code,
     peers,
-    playState:  room.playState,
-    masterId:   room.playState.masterId,
-    yourPeerId: forPeerId,
+    playState:     room.playState,
+    masterId:      room.playState.masterId,
+    yourPeerId:    forPeerId,
+    roomMode:      room.youtubeVideoId ? 'youtube' : 'local',
+    youtubeVideoId: room.youtubeVideoId || null,
+    youtubeTitle:  room.youtubeTitle   || null,
   };
 }
 
@@ -298,6 +301,46 @@ function handleConnection(ws, req, roomManager) {
       }, myPeerId);
       broadcast(myRoom, 'peer_ready', { peerId: myPeerId, isReady: false });
       console.log(`[Sync] ${myRoom.code} returning both peers to lobby`);
+      return;
+    }
+
+    // ── MODE_CHANGE ───────────────────────────────────────────────────────
+    // Either peer can switch the room between local-file and YouTube mode.
+    // This resets all ready / file state so both have to re-confirm.
+    if (type === 'mode_change') {
+      const peer = myRoom.peers.get(myPeerId);
+      myRoom.peers.forEach(p => { p.isReady = false; p.fileDuration = null; p.fileName = null; });
+      myRoom.playState.playing      = false;
+      myRoom.playState.positionSec  = 0;
+      myRoom.playState.lastUpdatedAt = Date.now();
+      myRoom.youtubeVideoId = null;
+      myRoom.youtubeTitle   = null;
+      nudgeCooldownUntil = 0;
+      // Broadcast to ALL peers so both UIs update (sender gets their own echo back)
+      broadcast(myRoom, 'peer_mode_change', {
+        peerId: myPeerId,
+        name:   peer?.name || 'Your friend',
+        mode:   msg.mode === 'youtube' ? 'youtube' : 'local',
+      });
+      console.log(`[Mode] ${myRoom.code} → ${msg.mode} (${peer?.name})`);
+      return;
+    }
+
+    // ── YOUTUBE_LINK ──────────────────────────────────────────────────────
+    // Either peer can paste the link; server stores it and fans it out so
+    // BOTH clients receive peer_youtube_link and load the same video.
+    if (type === 'youtube_link') {
+      const peer = myRoom.peers.get(myPeerId);
+      myRoom.youtubeVideoId = msg.videoId || null;
+      myRoom.youtubeTitle   = msg.title   || null;
+      myRoom.peers.forEach(p => { p.isReady = false; p.fileDuration = null; });
+      nudgeCooldownUntil = 0;
+      broadcast(myRoom, 'peer_youtube_link', {
+        fromPeerId: myPeerId,
+        videoId:    msg.videoId,
+        title:      msg.title || null,
+      });
+      console.log(`[YouTube] ${myRoom.code} link: ${msg.videoId} by ${peer?.name}`);
       return;
     }
 
