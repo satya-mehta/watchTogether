@@ -1,14 +1,27 @@
 const { v4: uuidv4 } = require('uuid');
 
 // ── Tolerance window for sync checks (seconds) ────────────────────────────
-const SYNC_TOLERANCE_SEC = 2;
+// BUG FIX: increased from 2s to 3s.
+// YouTube's getCurrentTime() polling lags ~1-2s behind actual playback decode
+// position (the IFrame buffers ahead). A 2s tolerance caused continuous nudges
+// for a peer whose actual playback was fine but whose reported position was
+// slightly stale. 3s absorbs the polling lag without allowing real drift.
+const SYNC_TOLERANCE_SEC = 3;
+// ── Tolerance for file/video duration matching (seconds) ─────────────────
+// Separate from SYNC_TOLERANCE_SEC — two copies of the same film encoded
+// differently can differ by several seconds. 5s allows for this without
+// falsely flagging mismatched files.
+const DURATION_MATCH_TOLERANCE_SEC = 5;
 // ── Deduplication window for play_pause commands (ms) ────────────────────
-// BUG FIX: was 300ms — too aggressive. When peer B mirrors a play/pause the
-// relay arrives ~RTT ms later. 300ms blocked those legitimate mirror echoes
-// AND collapsed both peers into one dedup window (they share nothing, each
-// connection is its own closure, so this was never the right guard anyway).
-// Real fix: deduplicate by (playing, positionSec) identity, not time alone.
 const PLAY_PAUSE_DEDUP_MS = 80;
+// ── How long to suppress nudges after any seek by any peer (ms) ──────────
+// BUG FIX: seek storms happen when peer A seeks, server updates position,
+// peer B's sync_check fires before B has applied the seek, server sees huge
+// drift and nudges B, B seeks, now A's sync_check fires and A gets nudged
+// back. The per-connection nudge cooldown (1.5s) was too short — it only
+// covers one direction. A room-level seek cooldown blocks ALL nudges for
+// all peers for 3s after any seek, giving both sides time to land.
+const ROOM_SEEK_COOLDOWN_MS = 3000;
 
 // ── Send helper ───────────────────────────────────────────────────────────
 function send(ws, type, payload = {}) {
@@ -80,6 +93,21 @@ function handleConnection(ws, req, roomManager) {
     if (type === 'join') {
       const room = roomManager.findByCode(msg.roomCode?.toUpperCase());
       if (!room) return send(ws, 'error', { message: 'Room not found' });
+
+      // Evict any dead peer slots before checking capacity.
+      // When a peer's WS drops (Render free-tier, mobile network) and they
+      // reconnect within the 10-min room TTL, their old slot is still in the
+      // Map with a closed/dead socket. Without this, the room always appears
+      // full to the reconnecting peer, causing the "Room full" error.
+      room.peers.forEach((peer, peerId) => {
+        const state = peer.ws.readyState;
+        // readyState 2 = CLOSING, 3 = CLOSED
+        if (state === 2 || state === 3) {
+          console.log(`[Room] ${room.code} evicting dead peer ${peer.name} (ws=${state})`);
+          roomManager.removePeer(room, peerId);
+        }
+      });
+
       if (room.peers.size >= 2) return send(ws, 'error', { message: 'Room full' });
 
       myPeerId = uuidv4();
@@ -116,7 +144,7 @@ function handleConnection(ws, req, roomManager) {
       if (allPeers.length === 2 && allPeers.every(p => p.fileDuration !== null)) {
         const [a, b] = allPeers;
         const diff = Math.abs(a.fileDuration - b.fileDuration);
-        const match = diff <= SYNC_TOLERANCE_SEC;
+        const match = diff <= DURATION_MATCH_TOLERANCE_SEC;
         broadcast(myRoom, 'duration_check', {
           match,
           diff,
@@ -199,20 +227,19 @@ function handleConnection(ws, req, roomManager) {
     }
 
     // ── SEEK ─────────────────────────────────────────────────────────────
-    // BUG FIX: after a seek the server clock was updated, but the non-master
-    // peer hadn't applied it yet (takes a few frames). The old code would
-    // then see 2-3s of drift on the very next sync_check and fire a nudge
-    // immediately — before the seek even landed on the other client.
-    // Fix: after any seek, set a nudge cooldown of 1.5s so the non-master
-    // has time to apply the seek before we start drift-checking again.
     if (type === 'seek') {
       const ps = myRoom.playState;
       ps.positionSec   = msg.positionSec;
       ps.lastUpdatedAt = Date.now();
       ps.masterId      = myPeerId;
 
-      // Give the non-master 1.5s to land the seek before nudging again
-      nudgeCooldownUntil = Date.now() + 1500;
+      // Room-level cooldown: any seek from ANY peer blocks ALL nudges for
+      // ROOM_SEEK_COOLDOWN_MS. This breaks the dual-master seek storm where
+      // peer A seeks → B gets nudged before landing the seek → B seeks →
+      // A gets nudged → loop. Storing it on myRoom means every peer's
+      // sync_check handler reads the same shared value.
+      myRoom.seekCooldownUntil = Date.now() + ROOM_SEEK_COOLDOWN_MS;
+      nudgeCooldownUntil       = Date.now() + ROOM_SEEK_COOLDOWN_MS;
 
       broadcast(myRoom, 'seek', {
         positionSec: msg.positionSec,
@@ -247,7 +274,10 @@ function handleConnection(ws, req, roomManager) {
       if (typeof msg.positionSec !== 'number') return;
 
       if (myPeerId === myRoom.playState.masterId) {
-        // Only trust master's report when actually playing (not right after pause)
+        // Master clock update: always apply when playing so the server clock
+        // never freezes. This is independent of nudge cooldowns — cooldowns
+        // only control whether WE send nudges to others, not whether we accept
+        // authoritative clock updates from the master.
         if (myRoom.playState.playing) {
           myRoom.playState.positionSec   = msg.positionSec;
           myRoom.playState.lastUpdatedAt = Date.now();
@@ -255,22 +285,30 @@ function handleConnection(ws, req, roomManager) {
         return;
       }
 
-      // Non-master: check if we're in a cooldown (seek or recent nudge)
-      if (Date.now() < nudgeCooldownUntil) return;
+      // Non-master: check if we're in a cooldown (seek or recent nudge).
+      // Also check the room-level seekCooldownUntil which is set by ANY peer's
+      // seek — this breaks the seek storm where both peers seek simultaneously.
+      const now = Date.now();
+      const roomSeekCooldown = myRoom.seekCooldownUntil || 0;
+      if (now < nudgeCooldownUntil || now < roomSeekCooldown) return;
 
       const serverPos = roomManager.currentPosition(myRoom);
       const drift     = Math.abs(msg.positionSec - serverPos);
 
       if (drift > SYNC_TOLERANCE_SEC) {
-        // Set cooldown BEFORE sending nudge so back-to-back sync_checks
-        // from the same client don't fire multiple nudges
-        nudgeCooldownUntil = Date.now() + 1500;
+        // Set per-connection cooldown before sending nudge so back-to-back
+        // sync_checks from the same non-master don't fire multiple nudges.
+        // Keep this tight (1.5s) so the non-master resumes reporting quickly
+        // and the server clock (fed by the master) stays accurate.
+        // Do NOT set myRoom.seekCooldownUntil here — that would also block
+        // the master's clock updates, causing the frozen-clock nudge storm.
+        nudgeCooldownUntil = now + 1500;
 
         send(ws, 'sync_nudge', {
           positionSec: serverPos,
           drift,
           playing:  myRoom.playState.playing,
-          serverTs: Date.now(),
+          serverTs: now,
           masterId: myRoom.playState.masterId,
         });
 
@@ -288,12 +326,15 @@ function handleConnection(ws, req, roomManager) {
 
     // ── RETURN_TO_LOBBY ───────────────────────────────────────────────────
     if (type === 'return_to_lobby') {
+      // Reset ALL peers' isReady and fileDuration — both sides need to
+      // re-confirm before the next session can start.
+      myRoom.peers.forEach(p => { p.isReady = false; p.fileDuration = null; });
       const peer = myRoom.peers.get(myPeerId);
-      if (peer) peer.isReady = false;
       myRoom.playState.playing     = false;
       myRoom.playState.positionSec = 0;
       myRoom.playState.lastUpdatedAt = Date.now();
       nudgeCooldownUntil = 0;
+      myRoom.seekCooldownUntil = 0;
 
       broadcast(myRoom, 'return_to_lobby', {
         peerId: myPeerId,

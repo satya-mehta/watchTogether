@@ -1,8 +1,8 @@
 const { v4: uuidv4 } = require('uuid');
 
 // ── Room code generator ────────────────────────────────────────────────────
-const ADJECTIVES = ['COOL','NIGHT','SOFT','CALM','SWEET','LAZY','GOLDEN','QUIET'];
-const NOUNS      = ['NOOK','DEN','SOFA','FILM','DUSK','MOON','STAR','NIGHT'];
+const ADJECTIVES = ['COOL','NIGHT','SOFT','CALM','SWEET','LAZY','GOLDEN','QUIET','COZY','WILD','DARK','BRIGHT','VELVET','CRISP','MELLOW','SILVER'];
+const NOUNS      = ['NOOK','DEN','SOFA','FILM','DUSK','MOON','STAR','COVE','REEF','GLOW','LOFT','NEST','TIDE','VALE','HAZE','PINE'];
 
 function generateCode() {
   const adj  = ADJECTIVES[Math.floor(Math.random() * ADJECTIVES.length)];

@@ -89,6 +89,14 @@ class WatchTogetherClient extends EventTarget {
     try {
       await this.connect();
       if (this.roomCode) {
+        // BUG FIX: wait 2s before re-joining after a reconnect.
+        // The server heartbeat runs every 5s and only evicts dead sockets on
+        // the NEXT ping after a missed pong. If we reconnect and immediately
+        // try to join, the stale socket for our old peer slot may still be
+        // alive in the server's peer map — we get 'Room full' and are ejected.
+        // Waiting 2s gives the heartbeat a chance to terminate the dead socket
+        // and free the slot before we attempt to rejoin.
+        await new Promise(r => setTimeout(r, 2000));
         this._send('join', { roomCode: this.roomCode, name: this._myName, isHost: this._isHost });
       }
     } catch { /* will retry via onclose */ }
@@ -230,13 +238,15 @@ class WatchTogetherClient extends EventTarget {
         break;
 
       case 'sync_nudge':
-        // BUG FIX: suppress sync_checks after applying a nudge for the same
-        // reason — give the video element time to actually seek before we
-        // report our position again.
-        this._syncSuppressUntil = Date.now() + SYNC_SUPPRESS_AFTER_SEEK_MS;
-        // Emit as both 'sync_nudge' (for any low-level listeners) AND
-        // 'apply_sync' which is what app.js should hook into for actually
-        // applying the correction to the video element.
+        // sync_nudge is only ever sent to the non-master (the peer with drift).
+        // Suppress sync_checks so we don't immediately re-report a stale position
+        // before the seek has landed.
+        // Safety check: only suppress if the message is addressed to us (i.e.
+        // we are NOT the master in this message). The master never receives
+        // nudges but this guards against any unexpected routing.
+        if (rest.masterId && rest.masterId !== this.peerId) {
+          this._syncSuppressUntil = Date.now() + SYNC_SUPPRESS_AFTER_SEEK_MS;
+        }
         this._emit('sync_nudge', rest);
         this._emit('apply_sync', rest);
         break;

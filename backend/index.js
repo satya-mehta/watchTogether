@@ -27,7 +27,12 @@ wss.on('connection', (ws, req) => {
   handleConnection(ws, req, roomManager);
 });
 
-const HEARTBEAT_INTERVAL_MS = 5000;
+// BUG FIX: reduced from 5000ms to 2000ms.
+// At 5s, a dead socket can linger for up to 10s (missed ping + another full
+// interval before terminate fires). During that window, if the peer reconnects
+// and tries to rejoin, the room appears full. 2s heartbeat means stale sockets
+// are evicted within ~4s, well within the client's 2s rejoin delay.
+const HEARTBEAT_INTERVAL_MS = 2000;
 const heartbeatTimer = setInterval(() => {
   wss.clients.forEach((ws) => {
     if (ws.isAlive === false) {

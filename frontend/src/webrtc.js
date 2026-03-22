@@ -512,7 +512,7 @@ export class VideoCall extends EventTarget {
               break;
             }
             console.log('[WebRTC] Offer collision — polite peer rolling back');
-            await this.pc.setLocalDescription({ type: 'rollback' }).catch(() => {});
+            if (this.pc) await this.pc.setLocalDescription({ type: 'rollback' }).catch(() => {});
             this._makingOffer = false;
           }
         }

@@ -106,11 +106,14 @@ let lastRenderedFrameAt = 0;
 let lastFreezeRecoveryAt = 0;
 let freezeRecoveryCount = 0;
 let lastSentPlayPauseCommand = null;
-// Timestamp of the last play_pause command we RECEIVED from the server (not sent).
-// Native play/pause events that fire within a short window after receiving a
-// command are the sync engine echoing back — we suppress them to break the loop.
-let lastReceivedPlayPauseAt = 0;
-const RECEIVED_COMMAND_SUPPRESS_MS = 2000; // suppress native events for 2s after receiving OR sending a command
+// To break the sync echo loop we track the last play-state the sync engine
+// APPLIED (not just received). We suppress native play/pause events only when
+// the event matches the state we just applied AND the event fires within a
+// short window after the apply. This means a real user tap in the opposite
+// direction (e.g. tap pause 500ms after sync applied play) still goes through
+// because the state doesn't match.
+let lastAppliedSyncState = null;  // { playing: bool, at: number }
+const SYNC_ECHO_SUPPRESS_MS = 800; // window to absorb the echo event after applying
 let trackRefreshFrame = null;
 let trackRefreshTimeout = null;
 let localSubtitleTrackEl = null;
@@ -585,22 +588,29 @@ function sendPlayPauseCommand(playing, positionSec) {
     return;
   }
   lastSentPlayPauseCommand = { playing, positionSec: targetPos, at: now };
-  // Stamp lastReceivedPlayPauseAt on the SENDER side too.
-  // When this command reaches the other peer and they apply it, their video
-  // fires a play/pause event which they send back. That echo arrives at the
-  // master and the master's video fires an event — suppressing it here prevents
-  // the master from re-broadcasting and sustaining the loop.
-  lastReceivedPlayPauseAt = now;
+  // Show local attribution toast so the user sees their own action confirmed
+  showActionToast(playing ? '▶ You resumed' : '⏸ You paused');
   client?.playPause(playing, targetPos);
+}
+
+// Mark that the sync engine just applied a play or pause so that the
+// resulting native event can be identified as an echo and suppressed.
+function markSyncApplied(playing) {
+  lastAppliedSyncState = { playing, at: Date.now() };
 }
 
 async function ensureMoviePlaying({ source = 'sync', showHint = false } = {}) {
   if (roomMode === 'youtube') {
-    if (ytPlayer && ytPlayerReady) { ytPlayer.playVideo(); ytIsPaused = false; }
+    if (ytPlayer && ytPlayerReady) {
+      markSyncApplied(true);
+      ytPlayer.playVideo();
+      ytIsPaused = false;
+    }
     return true;
   }
   if (movieVideo.paused) {
     try {
+      markSyncApplied(true);
       await movieVideo.play();
       playbackRetryPending = false;
       markPlaybackProgress();
@@ -623,8 +633,11 @@ async function ensureMoviePlaying({ source = 'sync', showHint = false } = {}) {
 
 function nudgePlaybackToward(targetPos, driftSec, signedDrift) {
   if (roomMode === 'youtube') {
-    // YouTube's rate API is coarse — just hard-sync for large drifts
-    if (driftSec >= HARD_SYNC_THRESHOLD_SEC) applyHardSync({ targetPos, playing: true, announce: true, driftSec });
+    // YouTube has no playbackRate API, so we can only hard-seek.
+    // Only do it for significant drift (>= HARD threshold) to avoid
+    // constantly seeking backward by small amounts while the server clock
+    // catches up after a masterId change or brief position report lag.
+    if (driftSec >= HARD_SYNC_THRESHOLD_SEC) applyHardSync({ targetPos, playing: true, announce: driftSec >= SYNC_TOAST_THRESHOLD_SEC, driftSec });
     return;
   }
   if (signedDrift > SOFT_SYNC_THRESHOLD_SEC) {
@@ -657,7 +670,10 @@ function applyExplicitSeek(positionSec, { broadcast = true } = {}) {
     markPlaybackProgress();
     armRenderedFrameWatcher();
   }
-  if (broadcast) client?.seek(targetPos);
+  if (broadcast) {
+    showActionToast(`⏩ You skipped to ${formatDur(targetPos)}`);
+    client?.seek(targetPos);
+  }
 }
 
 window.handleExplicitSeekChange = (positionSec) => {
@@ -681,6 +697,7 @@ function applyHardSync({ targetPos, playing, announce = false, driftSec = 0 }) {
   if (playing && !shouldPauseAtEnd) {
     ensureMoviePlaying({ source: 'hard-sync', showHint: true });
   } else {
+    markSyncApplied(false);
     if (roomMode === 'youtube') {
       if (ytPlayer && typeof ytPlayer.pauseVideo === 'function') { ytPlayer.pauseVideo(); }
       ytIsPaused = true;
@@ -725,6 +742,7 @@ async function handleSyncCorrection({ positionSec, playing, serverTs, drift, sou
     }
     const isPaused = roomMode === 'youtube' ? ytIsPaused : movieVideo.paused;
     if (!isPaused) {
+      markSyncApplied(false);
       if (roomMode === 'youtube') {
         if (ytPlayer && typeof ytPlayer.pauseVideo === 'function') { ytPlayer.pauseVideo(); }
         ytIsPaused = true;
@@ -862,6 +880,8 @@ function resetToLanding(message = '') {
 
 function leaveRoomAndGoHome(message = '') {
   clearSyncPlaybackRate();
+  // Stop the playback health watchdog — it must not keep firing after we leave
+  if (playbackHealthTimer) { clearInterval(playbackHealthTimer); playbackHealthTimer = null; }
   if (roomMode === 'youtube') {
     if (ytPlayer && ytPlayerReady && typeof ytPlayer.pauseVideo === 'function') { ytPlayer.pauseVideo(); ytPlayer.seekTo(0, true); }
     ytIsPaused = true; ytCurrentTime = 0;
@@ -887,6 +907,12 @@ function leaveRoomAndGoHome(message = '') {
   callStarting = false;
   showCallUI(false);
   client?.disconnect();
+  // Reset wiring flag so controls re-register correctly if user creates a new room
+  videoControlsWired = false;
+  reactionsWired = false;
+  ytLobbyWired = false;
+  lastAppliedSyncState = null;
+  lastSentPlayPauseCommand = null;
   resetToLanding(message);
 }
 
@@ -911,6 +937,9 @@ async function recoverFrozenPlayback(reason = 'watchdog') {
   const targetPos = clampVideoPosition(movieVideo.currentTime);
   clearSyncPlaybackRate();
 
+  // Stamp sync-applied so the pause/play events from decoder nudge don't
+  // get broadcast to the peer — this is purely a local decoder recovery.
+  markSyncApplied(false); // pause stamp
   // Nudge the decoder and then request the authoritative position immediately.
   try {
     movieVideo.currentTime = clampVideoPosition(targetPos + 0.001);
@@ -918,6 +947,7 @@ async function recoverFrozenPlayback(reason = 'watchdog') {
   } catch {}
 
   movieVideo.pause();
+  markSyncApplied(true); // play stamp for the ensureMoviePlaying call below
   await ensureMoviePlaying({ source: reason, showHint: freezeRecoveryCount > 1 });
   client?.requestSyncCheck?.(targetPos);
   markPlaybackProgress();
@@ -980,18 +1010,23 @@ createRoomBtn?.addEventListener('click', async () => {
 joinRoomBtn?.addEventListener('click', async () => {
   clearLandingNotice();
   const code = roomCodeInput?.value.trim().toUpperCase();
-  if (!code) return alert('Enter a room code');
+  if (!code) return showLandingNotice('Please enter a room code first.');
 
-  // Validate the room exists before connecting
-  const res = await fetch(`${SERVER_ORIGIN}/api/rooms/${code}`);
-  if (!res.ok) return alert('Room not found or full');
+  try {
+    // Validate the room exists before connecting
+    const res = await fetch(`${SERVER_ORIGIN}/api/rooms/${code}`);
+    if (!res.ok) return showLandingNotice('Room not found or is already full.');
 
-  roomCode = code;
-  isHost   = false;
-  myName   = prompt('Your name?') || 'Guest';
+    roomCode = code;
+    isHost   = false;
+    myName   = prompt('Your name?') || 'Guest';
 
-  showLobby(roomCode);
-  await connectAndJoin();
+    showLobby(roomCode);
+    await connectAndJoin();
+  } catch (err) {
+    console.error('Join room failed:', err);
+    showLandingNotice('Could not reach the server. Please try again.');
+  }
 });
 
 async function connectAndJoin() {
@@ -1312,9 +1347,13 @@ function wireClientEvents() {
 
   // A play/pause command relayed from the master peer
   client.on('play_pause', async ({ playing, positionSec, serverTs }) => {
-    // Stamp the time so native play/pause events that fire as a result of
-    // applying this command are suppressed and not re-broadcast to the server.
-    lastReceivedPlayPauseAt = Date.now();
+    // Show attribution so the receiver knows their friend did this (not a glitch)
+    showActionToast(playing
+      ? `▶ ${getPeerDisplayName()} resumed`
+      : `⏸ ${getPeerDisplayName()} paused`);
+    // We don't pre-stamp here anymore — markSyncApplied() is now called from
+    // inside ensureMoviePlaying() and applyHardSync() at the exact moment the
+    // media element is told to play/pause, giving a precise echo window.
     try {
       await handleSyncCorrection({ positionSec, playing, serverTs, source: 'command' });
     } catch (e) {
@@ -1324,11 +1363,12 @@ function wireClientEvents() {
 
   // A seek command from the master peer
   client.on('seek', ({ positionSec }) => {
+    showActionToast(`⏩ ${getPeerDisplayName()} skipped to ${formatDur(positionSec)}`);
     applyExplicitSeek(positionSec, { broadcast: false });
   });
 
   client.on('sync_nudge', async ({ positionSec, playing, serverTs, drift }) => {
-    lastReceivedPlayPauseAt = Date.now();
+    // Same as play_pause — markSyncApplied is called inside the apply functions.
     try {
       await handleSyncCorrection({ positionSec, playing, serverTs, drift, source: 'sync' });
     } catch (e) {
@@ -1559,20 +1599,22 @@ function wireVideoControls() {
     if (!isAtVideoEnd() && playbackRetryPending) {
       showToast('Tap play to resume', 'info');
     }
-    // Native controls (Safari, fullscreen overlay, OS media keys) fire 'pause'
-    // without going through our custom button.
-    // Suppress if we recently received a play_pause command from the server —
-    // that command caused this event by calling movieVideo.pause() internally,
-    // and re-broadcasting it would create a ping-pong loop.
-    const isEchoFromSync = (Date.now() - lastReceivedPlayPauseAt) < RECEIVED_COMMAND_SUPPRESS_MS;
+    // Suppress only if the sync engine itself just caused this pause AND
+    // it's within the echo window. A real user tap in the opposite direction
+    // (play after sync-pause, or pause after sync-play) will NOT be suppressed
+    // because the state (playing=false for this event) matches lastAppliedSyncState.
+    const isEchoFromSync = lastAppliedSyncState &&
+      lastAppliedSyncState.playing === false &&
+      (Date.now() - lastAppliedSyncState.at) < SYNC_ECHO_SUPPRESS_MS;
     if (isWatchScreenActive() && peerPresent && !isAtVideoEnd() && !isEchoFromSync) {
       sendPlayPauseCommand(false, movieVideo.currentTime);
     }
   });
 
   movieVideo.addEventListener('play', () => {
-    // Same suppression logic as 'pause' above.
-    const isEchoFromSync = (Date.now() - lastReceivedPlayPauseAt) < RECEIVED_COMMAND_SUPPRESS_MS;
+    const isEchoFromSync = lastAppliedSyncState &&
+      lastAppliedSyncState.playing === true &&
+      (Date.now() - lastAppliedSyncState.at) < SYNC_ECHO_SUPPRESS_MS;
     if (isWatchScreenActive() && peerPresent && !isEchoFromSync) {
       sendPlayPauseCommand(true, movieVideo.currentTime);
     }
@@ -1968,6 +2010,19 @@ function showToast(msg, variant = 'info') {
   toastTimer = setTimeout(() => syncToast.classList.remove('show'), 4000);
 }
 
+// ── Action attribution toast ─────────────────────────────────────────────
+// Shown briefly on the watch screen to let both peers know who did what.
+// Separate from the sync error toast so they don't overwrite each other.
+const actionToastEl = document.getElementById('action-toast');
+let actionToastTimer = null;
+function showActionToast(msg) {
+  if (!actionToastEl || !isWatchScreenActive()) return;
+  actionToastEl.textContent = msg;
+  actionToastEl.classList.add('show');
+  clearTimeout(actionToastTimer);
+  actionToastTimer = setTimeout(() => actionToastEl.classList.remove('show'), 2500);
+}
+
 function formatDur(sec) {
   const h = Math.floor(sec / 3600);
   const m = Math.floor((sec % 3600) / 60);
@@ -2120,6 +2175,8 @@ function onYtStateChange(state) {
   const nowPaused  = state !== 1;
   const wasPlaying = !ytIsPaused;
   ytIsPaused = nowPaused;
+  // Expose current play state so the inline auto-hide logic can query it
+  window.ytIsPlaying = () => !ytIsPaused;
   window.ytPlayStateUpdate?.(state === 1);
 
   if (state === 0 && wasPlaying) {
@@ -2131,9 +2188,12 @@ function onYtStateChange(state) {
   // State 1 = playing, state 2 = paused.
   // These can be triggered by YouTube's own overlay controls without going
   // through our custom play/pause button. Broadcast so the peer stays in sync.
-  // Suppress if we recently received a command from the server — that command
-  // caused this state change, and re-broadcasting would create a loop.
-  const isEchoFromSync = (Date.now() - lastReceivedPlayPauseAt) < RECEIVED_COMMAND_SUPPRESS_MS;
+  // Suppress only if the sync engine applied this exact state transition.
+  // State-matching means a real user tap in the OPPOSITE direction is never blocked.
+  const appliedPlaying = state === 1; // true=play, false=pause
+  const isEchoFromSync = lastAppliedSyncState &&
+    lastAppliedSyncState.playing === appliedPlaying &&
+    (Date.now() - lastAppliedSyncState.at) < SYNC_ECHO_SUPPRESS_MS;
   if (!isWatchScreenActive() || !peerPresent || isEchoFromSync) return;
   if (state === 1) {
     sendPlayPauseCommand(true, ytCurrentTime);

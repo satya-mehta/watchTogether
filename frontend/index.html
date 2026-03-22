@@ -237,13 +237,36 @@ body{font-family:'Nunito',sans-serif;background:var(--bg);color:var(--text);min-
   cursor:pointer;
   border:1px solid rgba(255,255,255,.12);
   box-shadow:0 10px 30px rgba(0,0,0,.24);
-  transition:background .2s,color .2s,transform .12s;
+  transition:background .2s,color .2s,transform .12s,opacity .35s;
 }
 .watch-back:hover{background:rgba(24,30,40,.92);color:#fff;transform:translateY(-1px);}
+.watch-back.ctrl-hidden{opacity:0;pointer-events:none;}
 
 /* Control bar */
 .ctrl-bar{position:absolute;bottom:0;left:0;right:0;z-index:15;padding:0 20px 18px;background:linear-gradient(to top,rgba(0,0,0,.9),transparent);transition:opacity .35s;pointer-events:all;}
 .ctrl-bar.hidden{opacity:0;pointer-events:none;}
+
+/* Action attribution toast — "Satya paused" / "You seeked to 1:23" */
+.action-toast{
+  position:absolute;
+  bottom:100px;
+  left:50%;
+  transform:translateX(-50%);
+  background:rgba(15,20,25,.88);
+  border:1px solid rgba(255,255,255,.12);
+  border-radius:24px;
+  padding:7px 18px;
+  font-size:12.5px;
+  font-weight:600;
+  color:rgba(255,255,255,.75);
+  z-index:16;
+  white-space:nowrap;
+  pointer-events:none;
+  opacity:0;
+  transition:opacity .2s;
+  letter-spacing:.2px;
+}
+.action-toast.show{opacity:1;}
 .progress-track{height:4px;background:rgba(255,255,255,.1);border-radius:3px;cursor:pointer;position:relative;margin-bottom:10px;}
 .progress-track:hover{height:5px;}
 input[type=range]#seek-bar{width:100%;height:4px;appearance:none;background:linear-gradient(to right,var(--primary) var(--pct,32%),rgba(255,255,255,.1) var(--pct,32%));border-radius:3px;cursor:pointer;outline:none;}
@@ -641,6 +664,8 @@ input[type=range]#seek-bar::-webkit-slider-thumb{appearance:none;width:14px;heig
 
   <!-- Sync toast -->
   <div class="sync-toast" id="sync-toast"></div>
+  <!-- Action attribution toast ("Satya paused", "You seeked to 1:23:45") -->
+  <div class="action-toast" id="action-toast"></div>
 
   <!-- Master badge -->
   <div class="master-badge" id="master-badge">You · controlling</div>
@@ -799,14 +824,62 @@ input[type=range]#seek-bar::-webkit-slider-thumb{appearance:none;width:14px;heig
     window.handleExplicitSeekChange?.(nextPos);
   });
 
-  // Control bar fade on mouse idle
+  // ── Control bar auto-hide ────────────────────────────────────────────────
+  // Shows on any interaction, hides after 3s of inactivity while playing.
+  // Always stays visible while paused. Works on both mouse and touch.
   let hideTimer;
   const cbar = document.getElementById('ctrl-bar');
-  document.getElementById('screen-watch').addEventListener('mousemove', () => {
+  const wback = document.getElementById('watch-back-btn');
+
+  function showControls() {
     cbar.classList.remove('hidden');
+    wback?.classList.remove('ctrl-hidden');
     clearTimeout(hideTimer);
-    if (!mov.paused) hideTimer = setTimeout(() => cbar.classList.add('hidden'), 3000);
-  });
+    // Only auto-hide while playing — keep visible when paused
+    const isPlaying = window._ytMode
+      ? (typeof window.ytIsPlaying === 'function' ? window.ytIsPlaying() : false)
+      : !mov.paused;
+    if (isPlaying) {
+      hideTimer = setTimeout(() => {
+        cbar.classList.add('hidden');
+        wback?.classList.add('ctrl-hidden');
+      }, 3000);
+    }
+  }
+
+  // Re-evaluate hide state when play/pause state changes
+  function onPlayStateChange() {
+    const isPlaying = window._ytMode
+      ? (typeof window.ytIsPlaying === 'function' ? window.ytIsPlaying() : false)
+      : !mov.paused;
+    if (!isPlaying) {
+      // Paused — always show controls, cancel any pending hide
+      clearTimeout(hideTimer);
+      cbar.classList.remove('hidden');
+      wback?.classList.remove('ctrl-hidden');
+    } else {
+      // Started playing — start the hide timer
+      clearTimeout(hideTimer);
+      hideTimer = setTimeout(() => {
+        cbar.classList.add('hidden');
+        wback?.classList.add('ctrl-hidden');
+      }, 3000);
+    }
+  }
+
+  const watchScreen = document.getElementById('screen-watch');
+  watchScreen.addEventListener('mousemove', showControls);
+  watchScreen.addEventListener('touchstart', showControls, { passive: true });
+  watchScreen.addEventListener('click', showControls);
+
+  mov.addEventListener('play',  onPlayStateChange);
+  mov.addEventListener('pause', onPlayStateChange);
+  // YouTube play state is fed back via window.ytPlayStateUpdate
+  const _origYtPlayStateUpdate = window.ytPlayStateUpdate;
+  window.ytPlayStateUpdate = function(playing) {
+    _origYtPlayStateUpdate?.(playing);
+    onPlayStateChange();
+  };
 
   // PiP drag
   const pip = document.getElementById('pip-bubble');
