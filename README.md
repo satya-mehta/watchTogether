@@ -1,6 +1,6 @@
 # Watch Together
 
-Real-time watch party app for syncing playback between two people — works with both **local video files** and **YouTube videos**. Includes lobby readiness, emoji reactions, shareable room links, and a peer-to-peer WebRTC video call.
+Real-time watch party app for syncing playback between two people — works with both **local video files** and **YouTube videos**. Includes lobby readiness, emoji reactions, shareable room links, a peer-to-peer WebRTC video call, and cinematic auto-hiding player controls.
 
 The project is split into a static frontend and a separate Node/WebSocket backend so you can deploy the UI to Netlify/Vercel and the server to Render.
 
@@ -12,6 +12,12 @@ The project is split into a static frontend and a separate Node/WebSocket backen
 | Dashboard | New User Guide |
 | ![Lobby](frontend/assets/screenshots/ss03.png) | ![Player](frontend/assets/screenshots/ss04.png) |
 | Lobby | Player |
+
+## Highlights
+
+- **Cinematic player UI**: the timeline and controls stay visible when needed, fade away after 3 seconds of inactivity, and instantly return on mouse movement.
+- **Safe interaction states**: controls stay visible while hovering, clicking, or dragging the seek bar, so the timeline never disappears mid-adjustment.
+- **Works across both modes**: the same polished player experience applies to local files and YouTube watch sessions.
 
 ## Quick start
 
@@ -98,7 +104,7 @@ Then open `http://localhost:3000` and point `config.js` to `http://localhost:300
 4. The server compares file durations to confirm both sides picked the same movie.
 5. Once both people mark ready, the app starts a synchronised countdown.
 6. Both peers land on the watch screen **paused at position 0** — either person can press play to start, and the play command syncs the other side automatically.
-7. Play, pause, seek, react, and video chat in sync.
+7. Play, pause, seek, react, and video chat in sync, with player controls that fade away after inactivity and reappear as soon as you move the mouse.
 
 ### YouTube mode
 
@@ -106,7 +112,7 @@ Then open `http://localhost:3000` and point `config.js` to `http://localhost:300
 2. Either person pastes a YouTube link. The video title and thumbnail appear immediately, and the link is broadcast to the other peer automatically — they see the same preview without pasting anything themselves.
 3. The server confirms both sides have loaded the same video duration.
 4. Both people mark ready and the synchronised countdown begins. Both peers land on the watch screen **paused** — either person presses play to start in sync.
-5. Play, pause, and seek controls stay in sync exactly like local file mode.
+5. Play, pause, and seek controls stay in sync exactly like local file mode, with the same auto-hiding timeline behavior on the watch screen.
 
 > **Note on embedding:** YouTube videos with embedding disabled by the uploader (common for music videos and major studio trailers) will show a clear error message. The error is shown only to the person who pasted the link — the other peer sees a separate "cannot be embedded" notice. Use a different video in that case.
 
