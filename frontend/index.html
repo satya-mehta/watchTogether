@@ -687,8 +687,6 @@ input[type=range]#seek-bar::-webkit-slider-thumb{appearance:none;width:14px;heig
     <div id="yt-player"></div>
   </div>
 
-  <!-- Sync toast -->
-  <div class="sync-toast" id="sync-toast"></div>
   <!-- Action attribution toast ("Satya paused", "You seeked to 1:23:45") -->
   <div class="action-toast" id="action-toast"></div>
 
@@ -1265,5 +1263,12 @@ input[type=range]#seek-bar::-webkit-slider-thumb{appearance:none;width:14px;heig
 
   function fmt(s){if(!s||isNaN(s))return'0:00:00';const h=Math.floor(s/3600),m=Math.floor((s%3600)/60),sc=Math.floor(s%60);return h+':'+String(m).padStart(2,'0')+':'+String(sc).padStart(2,'0');}
 </script>
+
+<!-- Sync toast — direct body child so position:fixed is never clipped by overflow:hidden on #screen-watch -->
+<div class="sync-toast" id="sync-toast"></div>
+
+<!-- Version badge -->
+<div id="version-badge" style="position:fixed;bottom:14px;right:16px;z-index:9999;font-size:10px;font-family:'Space Grotesk',monospace;color:rgba(255,255,255,.22);letter-spacing:.8px;pointer-events:none;user-select:none;">V0.6.3</div>
+
 </body>
 </html>

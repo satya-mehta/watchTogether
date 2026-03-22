@@ -206,6 +206,17 @@ A daily record of bugs found, root causes, and fixes applied.
 - Fix 2 (server — `return_to_lobby`): Clear `youtubeVideoId` and `youtubeTitle` on lobby return.
 - Fix 3 (frontend — `joined` handler): Only restore YouTube mode `if (data.roomMode === 'youtube' && peerPresent)`. A solo join always starts with a clean slate.
 
+### UI fixes (same session, follow-up)
+
+**Bug: Sync toast still showing at bottom of watch screen despite `position:fixed` CSS**
+- Root cause: `#screen-watch` has `overflow:hidden` in its CSS. This creates a new "containing block" for fixed-position descendants in most browsers, so `position:fixed` on the toast behaved like `position:absolute` — anchored inside the watch screen instead of the viewport. The lobby screen has no `overflow:hidden`, which is why the exact same toast element showed at the top correctly there but not on the watch screen.
+- Fix: Moved `#sync-toast` from being a child of `#screen-watch` to a direct child of `<body>`, placed after all screen elements. At the body level no ancestor has `overflow:hidden`, so `position:fixed` + `top:18px` works as intended everywhere. No changes to CSS or the `showToast()` function needed — same element, same styles, correct stacking context.
+
+**Feature: Version badge**
+- Added a subtle `v0.6.3` label fixed to the bottom-right corner of every screen.
+- Inline style only: `font-size:10px`, `color:rgba(255,255,255,.22)`, `pointer-events:none`, `user-select:none` — completely non-interactive and barely visible.
+- Version rationale: 6 days of development, 3 bug-fix passes on Day 6 → `v0.6.3`.
+
 ---
 
 ## Notes & Known Limitations
