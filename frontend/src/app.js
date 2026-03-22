@@ -1095,8 +1095,12 @@ function wireClientEvents() {
       }
     });
     if (peerPresent) ensureVideoCall();
-    // Restore YouTube mode if room was already in YouTube mode when we joined
-    if (data.roomMode === 'youtube') {
+    // Restore YouTube mode only if BOTH peers are already in the room.
+    // If we are the first peer (solo join or fresh room), never auto-load
+    // someone else's YouTube state — this prevents cross-room leakage where
+    // a stale room snapshot from a previously-active room restores the wrong
+    // video when a new user joins an empty-but-not-yet-GC'd room slot.
+    if (data.roomMode === 'youtube' && peerPresent) {
       setRoomModeUI('youtube', false);
       if (data.youtubeVideoId) {
         const ytInput = document.getElementById('yt-url-input');
@@ -1212,7 +1216,16 @@ function wireClientEvents() {
       if (ytPlayerInitPromise) {
         try { await ytPlayerInitPromise; } catch {/* init errors are handled inside */}
       }
-      if (ytPlayer && ytPlayerReady) ytPlayer.seekTo(positionSec, true);
+      if (ytPlayer && ytPlayerReady) {
+        // Use allowSeekAhead=false so the IFrame doesn't start buffering/playing
+        // audio while the countdown overlay is showing. A seekTo with
+        // allowSeekAhead=true can trigger the player to start playing audio
+        // even with autoplay:0, because the player treats it as a user action.
+        ytPlayer.seekTo(positionSec, false);
+        // Immediately pause to silence any audio that started during seek.
+        if (typeof ytPlayer.pauseVideo === 'function') ytPlayer.pauseVideo();
+      }
+      ytIsPaused = true;
       ytCurrentTime = positionSec;
     } else {
       movieVideo.currentTime = positionSec;
@@ -1225,6 +1238,8 @@ function wireClientEvents() {
       // screen paused at position 0. Either peer can press play to start,
       // and the play_pause sync command will bring the other peer along.
       if (roomMode === 'youtube') {
+        // Double-ensure paused when entering watch screen — the IFrame may have
+        // resumed during countdown.
         if (ytPlayer && ytPlayerReady && typeof ytPlayer.pauseVideo === 'function') {
           ytPlayer.pauseVideo();
         }

@@ -333,6 +333,10 @@ function handleConnection(ws, req, roomManager) {
       myRoom.playState.playing     = false;
       myRoom.playState.positionSec = 0;
       myRoom.playState.lastUpdatedAt = Date.now();
+      // Clear YouTube state so the room snapshot sent to any future joiner
+      // does not restore a stale video from a previous session in this room.
+      myRoom.youtubeVideoId = null;
+      myRoom.youtubeTitle   = null;
       nudgeCooldownUntil = 0;
       myRoom.seekCooldownUntil = 0;
 
@@ -425,6 +429,15 @@ function handleConnection(ws, req, roomManager) {
           reason:      'peer_left',
           serverTs:    Date.now(),
         });
+      } else {
+        // Room is now empty. Clear YouTube state immediately so any future
+        // joiner who lands in this slot (within the 10-min TTL window) does
+        // not see stale video state from a completely different session.
+        myRoom.youtubeVideoId = null;
+        myRoom.youtubeTitle   = null;
+        myRoom.playState.playing     = false;
+        myRoom.playState.positionSec = 0;
+        myRoom.playState.masterId    = null;
       }
     } catch (err) {
       console.error('[WS] Error during close handler:', err.message);

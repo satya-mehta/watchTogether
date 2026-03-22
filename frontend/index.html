@@ -867,10 +867,26 @@ input[type=range]#seek-bar::-webkit-slider-thumb{appearance:none;width:14px;heig
     }
   }
 
-  const watchScreen = document.getElementById('screen-watch');
-  watchScreen.addEventListener('mousemove', showControls);
-  watchScreen.addEventListener('touchstart', showControls, { passive: true });
-  watchScreen.addEventListener('click', showControls);
+  // Listen on document with capture:true so events intercepted by the
+  // YouTube IFrame (which sits over the whole screen at z-index:1) are
+  // still caught before reaching the iframe. Without capture, mousemove
+  // over the YT player never reaches #screen-watch and controls stay hidden.
+  document.addEventListener('mousemove', (e) => {
+    if (!isWatchActive()) return;
+    showControls();
+  }, { passive: true });
+  document.addEventListener('touchstart', (e) => {
+    if (!isWatchActive()) return;
+    showControls();
+  }, { passive: true });
+  document.addEventListener('click', (e) => {
+    if (!isWatchActive()) return;
+    showControls();
+  }, true);
+
+  function isWatchActive() {
+    return document.getElementById('screen-watch')?.classList.contains('active');
+  }
 
   mov.addEventListener('play',  onPlayStateChange);
   mov.addEventListener('pause', onPlayStateChange);

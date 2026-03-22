@@ -327,105 +327,36 @@ The module tries public STUN servers first (Google, Cloudflare) then falls back 
 ## Troubleshooting
 
 ### WebSocket connection fails
+- Verify the backend is running: `http://localhost:3001/health`
+- Confirm `frontend/config.js` points to the correct backend URL
+- Ensure `CORS_ORIGIN` in the backend env includes your frontend URL
 
-**Symptoms:** "Connection refused" or "Failed to connect" in the browser console.
-
-**Solutions:**
-- Verify the backend is running: check `http://localhost:3001/health`.
-- Confirm `frontend/config.js` points to the correct backend URL.
-- Ensure `CORS_ORIGIN` in the backend environment includes your frontend URL.
-
-### Video call doesn't start
-
-**Symptoms:** P2P video not appearing, camera unavailable.
-
-**Solutions:**
-- Grant camera and microphone permissions when prompted.
-- Check NAT/firewall rules — some corporate networks block WebRTC. Deploy your own TURN server or use a hosted service.
-- Verify `webrtc.js` is loading in DevTools → Network.
-
-### Camera toggle breaks remote video
-
-**Symptoms:** After toggling camera off and back on, the remote peer no longer sees your video.
-
-**Solutions:**
-- Make sure you are on the latest `webrtc.js`. The old version used `removeTrack()` which triggered ICE renegotiation on every toggle. The current version uses `track.enabled = false/true` which has no effect on the connection.
+### Video call doesn't connect
+- Grant camera and microphone permissions when prompted
+- Some corporate networks block WebRTC UDP — deploy your own TURN server or use Twilio/Xirsys
+- Check `webrtc.js` is loading in DevTools → Network
 
 ### YouTube video shows "Watch on YouTube"
+- Embedding is disabled by the uploader (error 101/150) — very common for music videos and major-label trailers
+- The error is shown only to the person who pasted the link. Try a different video — tutorial channels, TED, and independent creators work fine.
 
-**Symptoms:** Grey IFrame with a "Watch on YouTube" button instead of the video.
+### Videos drift out of sync
+- For local file mode: ensure both files are identical (same encode). `duration_check` will flag a mismatch.
+- For YouTube mode: confirm both sides loaded the same video ID
+- Keep tabs in the foreground — backgrounded tabs throttle timers, causing drift
 
-**Solutions:**
-- The video has embedding disabled (YouTube error 101/150). Very common for music videos and movie trailers.
-- The error toast is shown only to the person who pasted the link — the other peer sees a separate message asking them to request a different video.
-- Try a different video. Tutorial channels, TED talks, and most independent creators work fine.
+### Room shows "not found" after a network drop
+- Empty rooms survive for 10 minutes — rejoin within that window using the same link
+- After a Render cold start (free tier), all rooms are gone; create a new room
 
-### YouTube video loads on one side but not the other
-
-**Symptoms:** One peer sees the thumbnail, the other still shows "Paste a YouTube link…".
-
-**Solutions:**
-- The backend is likely running an older version that doesn't handle `youtube_link`. Check the console on the sender's side for `[WT] Server error: Unknown message type: youtube_link` and redeploy with the latest `wsHandler.js`.
-
-### Duration mismatch shown even for the same YouTube video
-
-**Symptoms:** `duration_check ✗ drift Xs` in the backend log right after a correct match.
-
-**Solutions:**
-- Make sure you are on the latest `app.js`. The old receiver code called `fileReady` twice (once immediately and again after player init), and the second call could carry a different duration from the IFrame player's load cycle. The current version reports duration exactly once using the sender's confirmed value.
-
-### Mode switch notice not appearing for the other user
-
-**Symptoms:** Switching to YouTube mode does nothing on the friend's screen.
-
-**Solutions:**
-- Check the backend is on the latest `wsHandler.js` and the frontend on the latest `client.js`. Earlier versions were missing `peer_mode_change` and `peer_youtube_link` in the client-side `_handle()` switch, silently dropping both message types.
-
-### Countdown starts at different times
-
-**Symptoms:** One user enters the watch screen 1-4 seconds before the other.
-
-**Solutions:**
-- Make sure both frontend and backend are on the latest versions. The `serverTs` field in `countdown_start` is what aligns the countdowns, and the `countdown_start` handler must be `async` to await player init before seeking.
-- Very high one-way latency (> 2s) will still cause small gaps — expected on extremely slow connections.
-
-### Video playback out of sync
-
-**Symptoms:** Videos drift apart, or repeated "nudging peer" lines in the backend log for the same position.
-
-**Solutions:**
-- For local file mode, ensure both files are identical (same codec and duration). The `duration_check` will flag a mismatch.
-- For YouTube mode, confirm both sides loaded the same video ID.
-- Bring tabs to the foreground — background tabs throttle timers, causing drift.
-- On slow connections, increase `SYNC_SUPPRESS_AFTER_SEEK_MS` in `client.js` and `nudgeCooldownUntil` in `wsHandler.js` to `2500`.
-
-### Room disappears immediately after both users disconnect
-
-**Symptoms:** Refreshing the page shows "Room not found" even after a brief network drop.
-
-**Solutions:**
-- Make sure you are on the latest `roomManager.js`. The old version destroyed the room the instant the last peer left. The current version keeps empty rooms alive for 10 minutes (`EMPTY_ROOM_TTL_MS`) so both users can reconnect without losing their room code.
-
-### App gets stuck reconnecting after backend restart
-
-**Symptoms:** Console floods with `Not in a room` errors, UI is frozen on the lobby or watch screen.
-
-**Solutions:**
-- This is now handled automatically. When the client receives `Room full` or `Room not found` during a reconnect, it stops retrying and returns the user to the landing screen with an explanatory message. If you see this loop, you are on an older version of `client.js`.
-
-### Deployed frontend can't reach deployed backend
-
-**Symptoms:** CORS errors or timeouts in production.
-
-**Solutions:**
-- Confirm `frontend/config.js` has the full Render URL (not localhost).
-- Check that `CORS_ORIGIN` on the backend includes the frontend domain.
-- Enable Render Pro to prevent the backend from spinning down between sessions.
+### Deployed frontend can't reach backend
+- Confirm `frontend/config.js` has the full Render URL (not localhost)
+- Check `CORS_ORIGIN` on the backend includes the frontend domain
 
 ## Notes
 
-- Rooms are in-memory only and support up to 2 peers. They survive for 10 minutes after both peers disconnect before the GC removes them.
-- Room links such as `/COOL-1234` open the frontend and auto-join the room.
-- YouTube sync accuracy is ~250 ms (IFrame API polling). Local file sync is frame-accurate via the native `<video>` element.
-- Both peers always start the watch screen **paused** — autoplay is intentionally disabled to respect browser autoplay policies and give users a deliberate start.
-- For split deploys, set `frontend/config.js` to your Render backend URL.
+- Rooms are in-memory only, capped at 2 peers, and survive 10 minutes after both peers disconnect.
+- Room links (`/COOL-1234`) auto-join the room on open.
+- YouTube sync accuracy is ~250 ms (IFrame API polling). Local file sync is frame-accurate.
+- Both peers always start the watch screen **paused** — autoplay is intentionally disabled.
+- For development history, bug deep-dives, and root cause analysis see [`devlog.md`](./devlog.md).
