@@ -160,7 +160,16 @@ function handleConnection(ws, req, roomManager) {
       const peer  = myRoom.peers.get(myPeerId);
       peer.isReady = !!msg.isReady;
 
-      broadcast(myRoom, 'peer_ready', { peerId: myPeerId, isReady: peer.isReady });
+      // BUG FIX: exclude the sender from peer_ready broadcast.
+      // Sending it back to the sender caused the peer_ready handler to fire
+      // for the sender's own peerId. The `peerId === client.peerId` guard in
+      // the client caught it, but only AFTER updatePeerReadyState already ran
+      // (updating the friend's indicator with the sender's own state) and
+      // in edge cases where the guard check raced with client.peerId being set,
+      // it let the toast+pulse logic run — creating a feedback loop where the
+      // sender's own ready event triggered the "peer wants you" toast, which
+      // confused the UI into thinking the ready state needed to toggle again.
+      broadcast(myRoom, 'peer_ready', { peerId: myPeerId, isReady: peer.isReady }, myPeerId);
 
       const allPeers = [...myRoom.peers.values()];
       if (allPeers.length === 2 && allPeers.every(p => p.isReady)) {
@@ -369,7 +378,9 @@ function handleConnection(ws, req, roomManager) {
         peerId: myPeerId,
         name: peer?.name || 'Your friend',
       }, myPeerId);
-      broadcast(myRoom, 'peer_ready', { peerId: myPeerId, isReady: false });
+      // Notify the OTHER peer that this peer's ready state is now false.
+      // Exclude the sender — they already know they pressed back.
+      broadcast(myRoom, 'peer_ready', { peerId: myPeerId, isReady: false }, myPeerId);
       console.log(`[Sync] ${myRoom.code} returning both peers to lobby`);
       return;
     }
