@@ -287,7 +287,7 @@ A daily record of bugs found, root causes, and fixes applied.
 - Added `handleMouseMove()` with a `lastMoveAt` timestamp gate (`THROTTLE_MS = 80ms`) — at most one `clearTimeout/setTimeout` cycle per 80ms during continuous movement.
 - Added `isHoveringCtrl` flag — `mouseenter`/`mouseleave` on the ctrl-bar itself cancels the timer while the user is hovering, restarts it on leave.
 - Added `mouseleave` on `#screen-watch` — starts a shorter `LEAVE_DELAY_MS = 800ms` timer when cursor exits the player area.
-- `hideControls()` checks `isHoveringCtrl` and bails out — no hide while interacting.
+- `hideControls()` now bails out while the user is hovering, clicking, or dragging controls.
 - `onPlayStateChange()` — on pause: immediately shows, clears timer, force-removes `.ctrl-hidden`. On play: calls `showControls()` which arms the timer.
 - All timer arms call `clearTimeout(inactivityTimer)` first — mathematically impossible to have two timers active simultaneously.
 
@@ -304,6 +304,20 @@ A daily record of bugs found, root causes, and fixes applied.
 - Mobile: panel width clamps to `min(86vw, 320px)` on narrow screens.
 
 ---
+
+### Follow-up bug fix: timeline could still hide at the wrong time
+
+**Bug:** Two issues were still left in the control-bar flow after the initial rewrite:
+1. `window.ytPlayStateUpdate` was assigned twice in `frontend/index.html`. The later assignment updated only the play/pause icon and silently overwrote the earlier auto-hide hook, so YouTube playback changes no longer restarted or cancelled the inactivity timer correctly.
+2. Hover state was guarded, but active control interaction was not. If the user clicked or dragged the seek bar, the timer could still be re-armed underneath them and hide the bar immediately after a drag.
+
+**Fix:**
+- Added `updatePlayPauseIcon()` and reduced YouTube play-state wiring to a single `window.ytPlayStateUpdate()` definition that updates the icon and calls `onPlayStateChange()`.
+- Added `clearInactivityTimer()` helper so every timer arm/cancel goes through one path and always nulls the old handle.
+- Added `isInteractingWithControls` plus `isControlInteractionActive()` so hover, pointer-down interaction, and seek dragging (`window._isSeeking`) all keep the timeline visible.
+- `startInactivityTimer()` now bails out when playback is paused or the user is actively interacting, and its timeout callback clears the stored handle before calling `hideControls()`.
+- Added `pointerdown` on the control bar plus document-level `pointerup` / `pointercancel` so the 3-second timer restarts only after the user actually finishes interacting.
+
 
 ## Notes & Known Limitations
 

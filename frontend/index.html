@@ -1099,6 +1099,11 @@ input[type=range]#seek-bar::-webkit-slider-thumb{appearance:none;width:14px;heig
   const PLAY_PATH  = '<path d="M8 5v14l11-7z"/>';
   const PAUSE_PATH = '<path d="M6 19h4V5H6v14zm8-14v14h4V5h-4z"/>';
   const urlnow = window.location.origin;
+  const watchScreen = document.getElementById('screen-watch');
+
+  function updatePlayPauseIcon(playing) {
+    ppIcon.innerHTML = playing ? PAUSE_PATH : PLAY_PATH;
+  }
 
   mov.addEventListener('timeupdate', () => {
     tcur.textContent = fmt(mov.currentTime);
@@ -1107,8 +1112,8 @@ input[type=range]#seek-bar::-webkit-slider-thumb{appearance:none;width:14px;heig
     if (sb && mov.duration) sb.style.setProperty('--pct', (mov.currentTime/mov.duration*100)+'%');
   });
   mov.addEventListener('loadedmetadata', () => { ttot.textContent = fmt(mov.duration); });
-  mov.addEventListener('play',  () => ppIcon.innerHTML = PAUSE_PATH);
-  mov.addEventListener('pause', () => ppIcon.innerHTML = PLAY_PATH);
+  mov.addEventListener('play',  () => updatePlayPauseIcon(true));
+  mov.addEventListener('pause', () => updatePlayPauseIcon(false));
 
   // Volume — delegates to app.js in YouTube mode
   document.getElementById('volume-slider').addEventListener('input', e => {
@@ -1174,11 +1179,13 @@ input[type=range]#seek-bar::-webkit-slider-thumb{appearance:none;width:14px;heig
   let lastMoveAt      = 0;
   // True while the cursor is inside the ctrl-bar element
   let isHoveringCtrl  = false;
+  // True while the user is pressing / dragging on the controls themselves
+  let isInteractingWithControls = false;
 
   // ── Helpers ──────────────────────────────────────────────────────────
 
   function isWatchActive() {
-    return document.getElementById('screen-watch')?.classList.contains('active');
+    return watchScreen?.classList.contains('active');
   }
 
   function isCurrentlyPlaying() {
@@ -1187,12 +1194,22 @@ input[type=range]#seek-bar::-webkit-slider-thumb{appearance:none;width:14px;heig
       : !mov.paused;
   }
 
+  function clearInactivityTimer() {
+    if (inactivityTimer !== null) {
+      clearTimeout(inactivityTimer);
+      inactivityTimer = null;
+    }
+  }
+
+  function isControlInteractionActive() {
+    return isHoveringCtrl || isInteractingWithControls || !!window._isSeeking;
+  }
+
   // ── Core show/hide ────────────────────────────────────────────────────
 
   function showControls() {
     // Cancel any pending hide — only one timer allowed
-    clearTimeout(inactivityTimer);
-    inactivityTimer = null;
+    clearInactivityTimer();
 
     // Avoid touching DOM if already visible (prevents layout flicker)
     if (!isCtrlVisible) {
@@ -1202,18 +1219,17 @@ input[type=range]#seek-bar::-webkit-slider-thumb{appearance:none;width:14px;heig
     }
 
     // Only arm the inactivity hide-timer while playing.
-    // While paused we stay permanently visible — no timer.
-    if (isCurrentlyPlaying()) {
+    // While paused, hovering, or dragging we stay permanently visible.
+    if (isCurrentlyPlaying() && !isControlInteractionActive()) {
       startInactivityTimer();
     }
   }
 
   function hideControls() {
-    // Never hide if cursor is over the controls bar itself
-    if (isHoveringCtrl) return;
+    // Never hide if the user is still hovering / clicking / dragging controls.
+    if (isControlInteractionActive()) return;
 
-    clearTimeout(inactivityTimer);
-    inactivityTimer = null;
+    clearInactivityTimer();
 
     if (isCtrlVisible) {
       isCtrlVisible = false;
@@ -1227,8 +1243,15 @@ input[type=range]#seek-bar::-webkit-slider-thumb{appearance:none;width:14px;heig
   // Arm the single inactivity timer.
   // ALWAYS call clearTimeout before setTimeout so stale timers never stack.
   function startInactivityTimer(delay = INACTIVITY_DELAY_MS) {
-    clearTimeout(inactivityTimer); // guarantee no duplicate timer
-    inactivityTimer = setTimeout(hideControls, delay);
+    clearInactivityTimer(); // guarantee no duplicate timer
+
+    // Never arm a hide while paused or while the user is actively using controls.
+    if (!isWatchActive() || !isCurrentlyPlaying() || isControlInteractionActive()) return;
+
+    inactivityTimer = window.setTimeout(() => {
+      inactivityTimer = null;
+      hideControls();
+    }, delay);
   }
 
   // ── Mouse / touch handlers ────────────────────────────────────────────
@@ -1250,10 +1273,17 @@ input[type=range]#seek-bar::-webkit-slider-thumb{appearance:none;width:14px;heig
   // - On play:  ensure controls are visible then start the inactivity timer.
 
   function onPlayStateChange() {
+    if (!isWatchActive()) {
+      clearInactivityTimer();
+      cbar.classList.remove('ctrl-hidden');
+      wback?.classList.remove('ctrl-hidden');
+      isCtrlVisible = true;
+      return;
+    }
+
     if (!isCurrentlyPlaying()) {
       // Paused — always show, never hide automatically
-      clearTimeout(inactivityTimer);
-      inactivityTimer = null;
+      clearInactivityTimer();
       showControls();
       // Also remove the class in case we were mid-fade when paused
       cbar.classList.remove('ctrl-hidden');
@@ -1288,32 +1318,42 @@ input[type=range]#seek-bar::-webkit-slider-thumb{appearance:none;width:14px;heig
 
   // mouseleave: when cursor exits the watch screen entirely, start a shorter
   // timer so the bar fades out promptly rather than waiting the full 3s.
-  document.getElementById('screen-watch')?.addEventListener('mouseleave', () => {
+  watchScreen?.addEventListener('mouseleave', () => {
     if (!isWatchActive()) return;
     if (!isCurrentlyPlaying()) return; // paused — never auto-hide
-    clearTimeout(inactivityTimer);
-    inactivityTimer = setTimeout(hideControls, LEAVE_DELAY_MS);
+    startInactivityTimer(LEAVE_DELAY_MS);
   });
 
-  // Track hover on ctrl-bar so we never hide while user is interacting with it.
-  cbar?.addEventListener('mouseenter', () => { isHoveringCtrl = true;  clearTimeout(inactivityTimer); });
+  function handleControlInteractionStart() {
+    isInteractingWithControls = true;
+    showControls();
+  }
+
+  function handleControlInteractionEnd() {
+    const wasInteracting = isInteractingWithControls || !!window._isSeeking;
+    isInteractingWithControls = false;
+    if (!wasInteracting) return;
+    if (isCurrentlyPlaying()) startInactivityTimer();
+  }
+
+  // Track hover + active input on ctrl-bar so we never hide mid-interaction.
+  cbar?.addEventListener('mouseenter', () => {
+    isHoveringCtrl = true;
+    clearInactivityTimer();
+  });
   cbar?.addEventListener('mouseleave', () => {
     isHoveringCtrl = false;
     // Restart the full inactivity timer when cursor leaves the bar
-    if (isCurrentlyPlaying()) startInactivityTimer();
+    if (!isInteractingWithControls && isCurrentlyPlaying()) startInactivityTimer();
   });
+  cbar?.addEventListener('pointerdown', handleControlInteractionStart);
+  document.addEventListener('pointerup', handleControlInteractionEnd);
+  document.addEventListener('pointercancel', handleControlInteractionEnd);
 
   // ── Play/pause wiring ─────────────────────────────────────────────────
 
   mov.addEventListener('play',  onPlayStateChange);
   mov.addEventListener('pause', onPlayStateChange);
-
-  // YouTube play state is fed back via window.ytPlayStateUpdate (set in app.js)
-  const _origYtPlayStateUpdate = window.ytPlayStateUpdate;
-  window.ytPlayStateUpdate = function(playing) {
-    _origYtPlayStateUpdate?.(playing);
-    onPlayStateChange();
-  };
 
   // PiP drag
   const pip = document.getElementById('pip-bubble');
@@ -1653,7 +1693,8 @@ input[type=range]#seek-bar::-webkit-slider-thumb{appearance:none;width:14px;heig
     if (d > 0) ttot.textContent = fmt(d);
   };
   window.ytPlayStateUpdate = function(playing) {
-    ppIcon.innerHTML = playing ? PAUSE_PATH : PLAY_PATH;
+    updatePlayPauseIcon(playing);
+    onPlayStateChange();
   };
 
   function fmt(s){if(!s||isNaN(s))return'0:00:00';const h=Math.floor(s/3600),m=Math.floor((s%3600)/60),sc=Math.floor(s%60);return h+':'+String(m).padStart(2,'0')+':'+String(sc).padStart(2,'0');}
@@ -1666,7 +1707,7 @@ input[type=range]#seek-bar::-webkit-slider-thumb{appearance:none;width:14px;heig
 <div class="action-toast" id="action-toast"></div>
 
 <!-- Version badge -->
-<div id="version-badge" style="position:fixed;bottom:14px;right:16px;z-index:9999;font-size:10px;font-family:'Space Grotesk',monospace;color:rgba(255,255,255,.22);letter-spacing:.8px;pointer-events:none;user-select:none;">V0.6.4</div>
+<div id="version-badge" style="position:fixed;bottom:14px;right:16px;z-index:9999;font-size:10px;font-family:'Space Grotesk',monospace;color:rgba(255,255,255,.22);letter-spacing:.8px;pointer-events:none;user-select:none;">V0.6.5</div>
 
 </body>
 </html>
