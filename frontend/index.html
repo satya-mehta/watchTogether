@@ -267,14 +267,30 @@ body{font-family:'Nunito',sans-serif;background:var(--bg);color:var(--text);min-
 .watch-back:hover{background:rgba(24,30,40,.92);color:#fff;transform:translateY(-1px);}
 .watch-back.ctrl-hidden{opacity:0;pointer-events:none;}
 
-/* Control bar */
-.ctrl-bar{position:absolute;bottom:0;left:0;right:0;z-index:15;padding:0 20px 18px;background:linear-gradient(to top,rgba(0,0,0,.9),transparent);transition:opacity .35s;pointer-events:all;}
-.ctrl-bar.hidden{opacity:0;pointer-events:none;}
+/* Control bar
+   transition lists BOTH opacity and right so that:
+   - opacity animates on hide/show (auto-hide system)
+   - right animates when chat panel opens/closes
+   Listing both on the same declaration prevents chat's `transition:right`
+   override from wiping out the opacity transition. */
+.ctrl-bar{
+  position:absolute;bottom:0;left:0;right:0;z-index:15;
+  padding:0 20px 18px;
+  background:linear-gradient(to top,rgba(0,0,0,.9),transparent);
+  transition:opacity .3s ease, transform .3s ease, right .3s cubic-bezier(.4,0,.2,1);
+  pointer-events:all;
+  will-change:opacity,transform; /* promote to compositor layer — no layout reflow on hide */
+}
+.ctrl-bar.ctrl-hidden{
+  opacity:0;
+  transform:translateY(8px); /* subtle slide-down reinforces the fade */
+  pointer-events:none;
+}
 
-/* Action attribution toast — "Satya paused" / "You seeked to 1:23" */
+/* Action attribution toast — top-centre, stacked below the sync toast */
 .action-toast{
-  position:absolute;
-  bottom:100px;
+  position:fixed;
+  top:calc(env(safe-area-inset-top, 0px) + 64px);
   left:50%;
   transform:translateX(-50%);
   background:rgba(15,20,25,.88);
@@ -284,12 +300,14 @@ body{font-family:'Nunito',sans-serif;background:var(--bg);color:var(--text);min-
   font-size:12.5px;
   font-weight:600;
   color:rgba(255,255,255,.75);
-  z-index:16;
+  z-index:8990;
   white-space:nowrap;
   pointer-events:none;
   opacity:0;
   transition:opacity .2s;
   letter-spacing:.2px;
+  max-width:calc(100vw - 40px);
+  text-align:center;
 }
 .action-toast.show{opacity:1;}
 .progress-track{height:4px;background:rgba(255,255,255,.1);border-radius:3px;cursor:pointer;position:relative;margin-bottom:10px;}
@@ -543,10 +561,7 @@ input[type=range]#seek-bar::-webkit-slider-thumb{appearance:none;width:14px;heig
 /* Control bar only spans the video area when chat is open */
 #screen-watch.chat-open .ctrl-bar{
   right:clamp(240px, 25vw, 340px);
-  transition:right .3s cubic-bezier(.4,0,.2,1);
-}
-.ctrl-bar{
-  transition:right .3s cubic-bezier(.4,0,.2,1);
+  /* transition is already defined on .ctrl-bar base rule — no override needed */
 }
 
 /* ── Chat header ── */
@@ -967,9 +982,6 @@ input[type=range]#seek-bar::-webkit-slider-thumb{appearance:none;width:14px;heig
     <div id="yt-player"></div>
   </div>
 
-  <!-- Action attribution toast ("Satya paused", "You seeked to 1:23:45") -->
-  <div class="action-toast" id="action-toast"></div>
-
   <!-- Master badge -->
   <div class="master-badge" id="master-badge">You · controlling</div>
 
@@ -1127,73 +1139,176 @@ input[type=range]#seek-bar::-webkit-slider-thumb{appearance:none;width:14px;heig
     window.handleExplicitSeekChange?.(nextPos);
   });
 
-  // ── Control bar auto-hide ────────────────────────────────────────────────
-  // Shows on any interaction, hides after 3s of inactivity while playing.
-  // Always stays visible while paused. Works on both mouse and touch.
-  let hideTimer;
-  const cbar = document.getElementById('ctrl-bar');
+  // ═══════════════════════════════════════════════════════════════════════
+  // CONTROL BAR AUTO-HIDE
+  // ═══════════════════════════════════════════════════════════════════════
+  //
+  // Design:
+  //   - Controls are visible by default.
+  //   - While PLAYING: hide after INACTIVITY_DELAY ms of no mouse/touch.
+  //   - While PAUSED:  always keep visible (cancel any pending hide timer).
+  //   - On any mousemove/touch/click: show immediately + reset the timer.
+  //   - On mouseleave from watch screen: start a shorter 800ms hide timer
+  //     so the bar doesn't linger after the cursor leaves the player area.
+  //   - Never hide while the cursor is hovering over the ctrl-bar itself
+  //     or while the user is dragging the seek bar.
+  //   - Throttle mousemove: only process at most once per THROTTLE_MS to
+  //     avoid clearTimeout/setTimeout churn at 120fps.
+  //
+  // Exactly ONE timer (`inactivityTimer`) is ever active at a time.
+  // Every path that sets the timer calls clearTimeout first.
+  // ─────────────────────────────────────────────────────────────────────
+
+  const INACTIVITY_DELAY_MS = 3000; // ms of no movement before hiding
+  const LEAVE_DELAY_MS      = 800;  // ms after cursor leaves before hiding
+  const THROTTLE_MS         = 80;   // mousemove processing interval
+
+  const cbar  = document.getElementById('ctrl-bar');
   const wback = document.getElementById('watch-back-btn');
 
-  function showControls() {
-    cbar.classList.remove('hidden');
-    wback?.classList.remove('ctrl-hidden');
-    clearTimeout(hideTimer);
-    // Only auto-hide while playing — keep visible when paused
-    const isPlaying = window._ytMode
-      ? (typeof window.ytIsPlaying === 'function' ? window.ytIsPlaying() : false)
-      : !mov.paused;
-    if (isPlaying) {
-      hideTimer = setTimeout(() => {
-        cbar.classList.add('hidden');
-        wback?.classList.add('ctrl-hidden');
-      }, 3000);
-    }
-  }
+  // Track current visibility so we skip redundant DOM writes
+  let isCtrlVisible   = true;
+  // The single inactivity timer handle — only ever one at a time
+  let inactivityTimer = null;
+  // Throttle gate: timestamp of last mousemove we actually processed
+  let lastMoveAt      = 0;
+  // True while the cursor is inside the ctrl-bar element
+  let isHoveringCtrl  = false;
 
-  // Re-evaluate hide state when play/pause state changes
-  function onPlayStateChange() {
-    const isPlaying = window._ytMode
-      ? (typeof window.ytIsPlaying === 'function' ? window.ytIsPlaying() : false)
-      : !mov.paused;
-    if (!isPlaying) {
-      // Paused — always show controls, cancel any pending hide
-      clearTimeout(hideTimer);
-      cbar.classList.remove('hidden');
-      wback?.classList.remove('ctrl-hidden');
-    } else {
-      // Started playing — start the hide timer
-      clearTimeout(hideTimer);
-      hideTimer = setTimeout(() => {
-        cbar.classList.add('hidden');
-        wback?.classList.add('ctrl-hidden');
-      }, 3000);
-    }
-  }
-
-  // Listen on document with capture:true so events intercepted by the
-  // YouTube IFrame (which sits over the whole screen at z-index:1) are
-  // still caught before reaching the iframe. Without capture, mousemove
-  // over the YT player never reaches #screen-watch and controls stay hidden.
-  document.addEventListener('mousemove', (e) => {
-    if (!isWatchActive()) return;
-    showControls();
-  }, { passive: true });
-  document.addEventListener('touchstart', (e) => {
-    if (!isWatchActive()) return;
-    showControls();
-  }, { passive: true });
-  document.addEventListener('click', (e) => {
-    if (!isWatchActive()) return;
-    showControls();
-  }, true);
+  // ── Helpers ──────────────────────────────────────────────────────────
 
   function isWatchActive() {
     return document.getElementById('screen-watch')?.classList.contains('active');
   }
 
+  function isCurrentlyPlaying() {
+    return window._ytMode
+      ? (typeof window.ytIsPlaying === 'function' ? window.ytIsPlaying() : false)
+      : !mov.paused;
+  }
+
+  // ── Core show/hide ────────────────────────────────────────────────────
+
+  function showControls() {
+    // Cancel any pending hide — only one timer allowed
+    clearTimeout(inactivityTimer);
+    inactivityTimer = null;
+
+    // Avoid touching DOM if already visible (prevents layout flicker)
+    if (!isCtrlVisible) {
+      isCtrlVisible = true;
+      cbar.classList.remove('ctrl-hidden');
+      wback?.classList.remove('ctrl-hidden');
+    }
+
+    // Only arm the inactivity hide-timer while playing.
+    // While paused we stay permanently visible — no timer.
+    if (isCurrentlyPlaying()) {
+      startInactivityTimer();
+    }
+  }
+
+  function hideControls() {
+    // Never hide if cursor is over the controls bar itself
+    if (isHoveringCtrl) return;
+
+    clearTimeout(inactivityTimer);
+    inactivityTimer = null;
+
+    if (isCtrlVisible) {
+      isCtrlVisible = false;
+      cbar.classList.add('ctrl-hidden');
+      wback?.classList.add('ctrl-hidden');
+    }
+  }
+
+  // ── Timer management ─────────────────────────────────────────────────
+
+  // Arm the single inactivity timer.
+  // ALWAYS call clearTimeout before setTimeout so stale timers never stack.
+  function startInactivityTimer(delay = INACTIVITY_DELAY_MS) {
+    clearTimeout(inactivityTimer); // guarantee no duplicate timer
+    inactivityTimer = setTimeout(hideControls, delay);
+  }
+
+  // ── Mouse / touch handlers ────────────────────────────────────────────
+
+  // Throttled: only act at most once every THROTTLE_MS.
+  // This prevents setTimeout/clearTimeout from firing 120 times/sec
+  // as the user sweeps the mouse, while still feeling instant.
+  function handleMouseMove() {
+    const now = Date.now();
+    if (now - lastMoveAt < THROTTLE_MS) return; // skip this frame
+    lastMoveAt = now;
+    showControls();
+  }
+
+  // ── Play/pause state change ───────────────────────────────────────────
+  //
+  // Called whenever the media transitions between playing and paused.
+  // - On pause: show controls immediately and cancel any pending hide.
+  // - On play:  ensure controls are visible then start the inactivity timer.
+
+  function onPlayStateChange() {
+    if (!isCurrentlyPlaying()) {
+      // Paused — always show, never hide automatically
+      clearTimeout(inactivityTimer);
+      inactivityTimer = null;
+      showControls();
+      // Also remove the class in case we were mid-fade when paused
+      cbar.classList.remove('ctrl-hidden');
+      wback?.classList.remove('ctrl-hidden');
+      isCtrlVisible = true;
+    } else {
+      // Playback started — show controls and begin countdown to hide
+      showControls();
+    }
+  }
+
+  // ── Event listeners ───────────────────────────────────────────────────
+
+  // document-level listeners use capture so the YouTube IFrame (which sits
+  // at z-index:1 and swallows pointer events in its iframe boundary) does
+  // not block mousemove/click from reaching us.
+
+  document.addEventListener('mousemove', () => {
+    if (!isWatchActive()) return;
+    handleMouseMove();
+  }, { passive: true });
+
+  document.addEventListener('touchstart', () => {
+    if (!isWatchActive()) return;
+    showControls(); // touch: always show immediately, no throttle needed
+  }, { passive: true });
+
+  document.addEventListener('click', () => {
+    if (!isWatchActive()) return;
+    showControls();
+  }, true /* capture — fires before iframe swallows it */);
+
+  // mouseleave: when cursor exits the watch screen entirely, start a shorter
+  // timer so the bar fades out promptly rather than waiting the full 3s.
+  document.getElementById('screen-watch')?.addEventListener('mouseleave', () => {
+    if (!isWatchActive()) return;
+    if (!isCurrentlyPlaying()) return; // paused — never auto-hide
+    clearTimeout(inactivityTimer);
+    inactivityTimer = setTimeout(hideControls, LEAVE_DELAY_MS);
+  });
+
+  // Track hover on ctrl-bar so we never hide while user is interacting with it.
+  cbar?.addEventListener('mouseenter', () => { isHoveringCtrl = true;  clearTimeout(inactivityTimer); });
+  cbar?.addEventListener('mouseleave', () => {
+    isHoveringCtrl = false;
+    // Restart the full inactivity timer when cursor leaves the bar
+    if (isCurrentlyPlaying()) startInactivityTimer();
+  });
+
+  // ── Play/pause wiring ─────────────────────────────────────────────────
+
   mov.addEventListener('play',  onPlayStateChange);
   mov.addEventListener('pause', onPlayStateChange);
-  // YouTube play state is fed back via window.ytPlayStateUpdate
+
+  // YouTube play state is fed back via window.ytPlayStateUpdate (set in app.js)
   const _origYtPlayStateUpdate = window.ytPlayStateUpdate;
   window.ytPlayStateUpdate = function(playing) {
     _origYtPlayStateUpdate?.(playing);
@@ -1546,6 +1661,9 @@ input[type=range]#seek-bar::-webkit-slider-thumb{appearance:none;width:14px;heig
 
 <!-- Sync toast — direct body child so position:fixed is never clipped by overflow:hidden on #screen-watch -->
 <div class="sync-toast" id="sync-toast"></div>
+
+<!-- Action attribution toast — direct body child so it stays pinned at the top above the player controls -->
+<div class="action-toast" id="action-toast"></div>
 
 <!-- Version badge -->
 <div id="version-badge" style="position:fixed;bottom:14px;right:16px;z-index:9999;font-size:10px;font-family:'Space Grotesk',monospace;color:rgba(255,255,255,.22);letter-spacing:.8px;pointer-events:none;user-select:none;">V0.6.4</div>

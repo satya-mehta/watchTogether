@@ -266,6 +266,31 @@ A daily record of bugs found, root causes, and fixes applied.
 | Client → Server | `chat_message` | `text`, `messageId` |
 | Server → Client | `chat_message` | `messageId`, `fromPeerId`, `senderName`, `text`, `timestamp` |
 
+### UI improvement: Control bar auto-hide rewrite
+
+**Problem:** The existing auto-hide had five bugs:
+1. The chat panel CSS added `transition:right .3s` on `.ctrl-bar`, which overwrote the `transition:opacity .35s` rule — the fade animation stopped working entirely after chat was added.
+2. `showControls()` called `clearTimeout` + `setTimeout` on every `mousemove` pixel (up to 120fps). No throttle, so timers were being created and destroyed hundreds of times per second during normal mouse movement.
+3. No `isVisible` flag — `classList.remove('hidden')` was called on every mousemove even when already visible, causing redundant DOM writes.
+4. `.ctrl-bar.hidden` was the CSS class but it conflicted with other `.hidden` usage in the codebase. The hide class was renamed `.ctrl-hidden` consistently.
+5. Controls didn't stay visible while hovering over the bar itself — the timer would fire mid-interaction and hide the controls while the user was trying to use them.
+
+**Fix — CSS (`index.html`):**
+- `.ctrl-bar` now declares `transition: opacity .3s ease, transform .3s ease, right .3s cubic-bezier(.4,0,.2,1)` in a single rule — all three properties co-exist without any override conflict.
+- `.ctrl-bar.ctrl-hidden` uses both `opacity:0` and `transform:translateY(8px)` — the subtle slide reinforces the fade visually.
+- `will-change: opacity, transform` promotes the bar to its own compositor layer so hide/show never triggers layout reflow.
+- Removed the duplicate `transition:right` override that the chat CSS block had added for `.ctrl-bar`.
+
+**Fix — JS (`index.html` inline script):**
+- Renamed `hideTimer` → `inactivityTimer` (single, clearly named timer handle).
+- Added `isCtrlVisible` boolean flag — `showControls()` and `hideControls()` skip DOM writes when state hasn't changed.
+- Added `handleMouseMove()` with a `lastMoveAt` timestamp gate (`THROTTLE_MS = 80ms`) — at most one `clearTimeout/setTimeout` cycle per 80ms during continuous movement.
+- Added `isHoveringCtrl` flag — `mouseenter`/`mouseleave` on the ctrl-bar itself cancels the timer while the user is hovering, restarts it on leave.
+- Added `mouseleave` on `#screen-watch` — starts a shorter `LEAVE_DELAY_MS = 800ms` timer when cursor exits the player area.
+- `hideControls()` checks `isHoveringCtrl` and bails out — no hide while interacting.
+- `onPlayStateChange()` — on pause: immediately shows, clears timer, force-removes `.ctrl-hidden`. On play: calls `showControls()` which arms the timer.
+- All timer arms call `clearTimeout(inactivityTimer)` first — mathematically impossible to have two timers active simultaneously.
+
 ### Edge cases handled
 
 - Empty message: rejected client-side (send button disabled) and server-side (empty string check before relay).
