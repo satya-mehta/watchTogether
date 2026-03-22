@@ -1197,6 +1197,19 @@ function wireClientEvents() {
   // ── Lobby ready ──────────────────────────────────────────────────────────
   client.on('peer_ready', ({ peerId, isReady }) => {
     updatePeerReadyState(peerId, isReady);
+    // Only react to the OTHER peer's state change (our own echo has peerId === client.peerId)
+    if (peerId === client.peerId) return;
+    const peerName = getPeerDisplayName();
+    if (isReady) {
+      // Friend clicked ready — nudge local user with a toast + button pulse
+      showToast(`${peerName} is ready — are you? 🍿`, 'success');
+      if (readyBtn && readyBtn.dataset.ready !== 'true' && !readyBtn.disabled) {
+        readyBtn.classList.add('peer-wants-you');
+      }
+    } else {
+      // Friend un-readied — stop the pulse
+      readyBtn?.classList.remove('peer-wants-you');
+    }
   });
 
   client.on('countdown_start', async ({ positionSec, serverTs }) => {
