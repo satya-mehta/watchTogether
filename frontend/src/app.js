@@ -1217,9 +1217,12 @@ function wireClientEvents() {
 
   // ── Lobby ready ──────────────────────────────────────────────────────────
   client.on('peer_ready', ({ peerId, isReady }) => {
-    updatePeerReadyState(peerId, isReady);
-    // Only react to the OTHER peer's state change (our own echo has peerId === client.peerId)
+    // The server now excludes the sender from peer_ready broadcasts, so this
+    // event always comes from the OTHER peer. The guard below is kept as a
+    // safety net in case of any edge-case reconnect replays, but under normal
+    // operation it will never fire.
     if (peerId === client.peerId) return;
+    updatePeerReadyState(peerId, isReady);
     const peerName = getPeerDisplayName();
     if (isReady) {
       // Friend clicked ready — nudge local user with a toast + button pulse
@@ -2489,9 +2492,12 @@ async function processYtUrl(videoId, { broadcast = true } = {}) {
     } else {
       setSyncStatus('Video loaded — you can mark ready!', 'idle');
     }
-    // Report our duration through the existing file_ready mechanism — both sides do this
+    // Report our duration through the existing file_ready mechanism — both sides do this.
+    // NOTE: do NOT call resetReadyState here. fileReady triggers a duration_check
+    // from the server which enables the ready button when both sides match.
+    // Calling resetReadyState after fileReady was disabling the button AFTER
+    // the server had just enabled it, leaving users stuck unable to mark ready.
     client?.fileReady(ytDuration, info.title || videoId);
-    resetReadyState({ disable: true });
   } catch (err) {
     console.error('[YT] processYtUrl failed:', err);
     loadEl?.classList.remove('show');
