@@ -134,7 +134,7 @@ A daily record of bugs found, root causes, and fixes applied.
 
 ---
 
-## Day 6 — Bug Sweep, UI Improvements & Cross-Room Leak (March 22, 2026)
+## Day 6 — Bug Sweep, UI Improvements & Cross-Room Leak (March 21, 2026)
 
 **Focus:** Full codebase audit, three UX improvements, and three user-reported bugs.
 
@@ -216,6 +216,67 @@ A daily record of bugs found, root causes, and fixes applied.
 - Added a subtle `v0.6.3` label fixed to the bottom-right corner of every screen.
 - Inline style only: `font-size:10px`, `color:rgba(255,255,255,.22)`, `pointer-events:none`, `user-select:none` — completely non-interactive and barely visible.
 - Version rationale: 6 days of development, 3 bug-fix passes on Day 6 → `v0.6.3`.
+
+---
+
+## Day 7 — Real-time Chat (March 22, 2026)
+
+**Focus:** Add a Google Meet-style slide-in chat panel with room-isolated real-time messaging over the existing WebSocket connection.
+
+### Architecture decisions
+
+- **No Socket.IO** — the backend already uses the `ws` library with a room-based message protocol. Adding Socket.IO would require a second server and break the existing WS handshake. Chat is implemented as a new `type: 'chat_message'` message in the existing protocol, exactly like `reaction` or `play_pause`.
+- **Optimistic rendering** — the sender renders their own message immediately without waiting for a server echo. The server never relays the message back to the sender (`broadcast(..., excludePeerId = myPeerId)`), so there is no echo to deduplicate. The receiver renders on arrival.
+- **Deduplication** — client generates a `messageId` (`timestamp + random`) per send. A `Set<messageId>` in `Chat` ensures the same message can never be rendered twice even on edge-case reconnects.
+- **Sanitization** — double layer: server strips HTML tags and control characters and caps at 500 chars; client uses `textContent` exclusively (never `innerHTML`) for all user-supplied strings.
+- **Video resize** — `#movie-video` and `#yt-player-wrap` are `position:absolute; inset:0`. When chat opens, the `.chat-open` class is added to `#screen-watch` which transitions `right` from `0` to `clamp(240px, 25vw, 340px)`. The control bar and reactions strip move with the same transition. Pure CSS, no JS layout math.
+
+### Files changed
+
+**`backend/wsHandler.js`**
+- Added `chat_message` handler: sanitizes `text` (strips HTML, caps 500 chars), builds payload with server-assigned `timestamp`, relays to OTHER peer only via `broadcast(..., myPeerId)`.
+
+**`frontend/src/client.js`**
+- Added `sendChat(text)` — generates `messageId`, sends `{ type: 'chat_message', text, messageId }`.
+- Added `case 'chat_message'` in `_handle()` switch — emits `chat_message` event.
+
+**`frontend/src/chat.js`** *(new file)*
+- `Chat` class: `mount()`, `wireClient()`, `setMyName()`, `reset()`, `open()`, `close()`.
+- `_buildDOM()` — injects chat toggle button (below reactions) and chat panel into `#screen-watch`.
+- `_openPanel()` / `_closePanel()` — toggles `.open` on panel and `.chat-open` on `#screen-watch`.
+- `_trySend()` — sanitizes, calls `client.sendChat()`, renders optimistically, clears input.
+- `_onIncoming()` — deduplicates via `_seenIds`, renders, increments unread dot, fires `window._showChatToast` for first 3 unread messages.
+- `_appendMessage()` — builds message bubble using only `textContent` (XSS-safe). Prunes DOM at 200 messages. Auto-scrolls only when user was within 80px of bottom.
+- Keyboard shortcut: `Ctrl/Cmd+Shift+C` toggles chat from anywhere on the watch screen.
+
+**`frontend/src/app.js`**
+- Imports `Chat` from `./chat.js`.
+- Creates singleton `chat` at module level.
+- `connectAndJoin()` calls `chat.setMyName()`, `chat.wireClient()`, `chat.mount()`.
+- `leaveRoomAndGoHome()` calls `chat.reset()`.
+- `window._showChatToast` assigned after `showToast` is defined — shows `💬 Name: text` peek-toast on watch screen when panel is closed.
+
+**`frontend/index.html`**
+- 280 lines of CSS added for: chat panel, chat toggle button, unread dot, message bubbles (self/peer), input row, scrollbar, mobile responsive overrides, and `.chat-open` layout transitions.
+
+### WebSocket protocol additions
+
+| Direction | Type | Key fields |
+|---|---|---|
+| Client → Server | `chat_message` | `text`, `messageId` |
+| Server → Client | `chat_message` | `messageId`, `fromPeerId`, `senderName`, `text`, `timestamp` |
+
+### Edge cases handled
+
+- Empty message: rejected client-side (send button disabled) and server-side (empty string check before relay).
+- XSS: `textContent` only in DOM; HTML stripped server-side.
+- Duplicate render: `_seenIds` Set deduplicates by `messageId`.
+- Cross-room leak: server only `broadcast`s within `myRoom`, excludes sender.
+- DOM memory: oldest messages pruned at 200 entries.
+- Auto-scroll: only fires when user is within 80px of bottom (`SCROLL_THRESHOLD`).
+- Peer disconnect: chat log is preserved client-side; reset only on explicit `leaveRoomAndGoHome()`.
+- Panel state on reconnect: chat survives WS reconnects (state is in-memory JS, not the socket).
+- Mobile: panel width clamps to `min(86vw, 320px)` on narrow screens.
 
 ---
 

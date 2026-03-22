@@ -140,6 +140,15 @@ class WatchTogetherClient extends EventTarget {
     this._send('reaction', { emoji });
   }
 
+  // Send a chat message to the other peer in the room.
+  // Returns the messageId so the caller can render the message optimistically
+  // and later deduplicate if it somehow arrives back via a relay.
+  sendChat(text) {
+    const messageId = `${Date.now()}-${Math.random().toString(36).slice(2,8)}`;
+    this._send('chat_message', { text, messageId });
+    return messageId;
+  }
+
   sendSignal(signal) {
     this._send('webrtc_signal', { signal });
   }
@@ -253,6 +262,10 @@ class WatchTogetherClient extends EventTarget {
 
       case 'reaction':
         this._emit('reaction', rest);
+        break;
+
+      case 'chat_message':
+        this._emit('chat_message', rest);
         break;
 
       case 'webrtc_signal':

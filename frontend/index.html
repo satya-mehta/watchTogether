@@ -454,6 +454,286 @@ input[type=range]#seek-bar::-webkit-slider-thumb{appearance:none;width:14px;heig
 #yt-player{width:100%;height:100%;}
 
 
+/* ════════════════════════════════════════════════════════════════════════════
+   CHAT PANEL — slide-in from right, video shrinks to 75%
+   ════════════════════════════════════════════════════════════════════════════ */
+
+/* Chat toggle button sits at the bottom of the reactions strip */
+.chat-toggle-btn{
+  position:relative;
+  /* inherits .react-btn sizing and colours */
+}
+.chat-toggle-btn.active{
+  background:rgba(99,102,241,.22);
+  border-color:rgba(99,102,241,.6);
+  color:var(--primary);
+}
+.chat-btn-inner{
+  position:relative;
+  display:flex;
+  align-items:center;
+  justify-content:center;
+}
+/* Unread dot — appears on the top-right corner of the chat icon */
+.chat-unread-dot{
+  display:none;
+  position:absolute;
+  top:-5px;
+  right:-5px;
+  min-width:14px;
+  height:14px;
+  background:var(--accent);
+  border-radius:99px;
+  font-size:9px;
+  font-weight:700;
+  color:#fff;
+  line-height:14px;
+  text-align:center;
+  padding:0 3px;
+  pointer-events:none;
+  box-shadow:0 0 0 2px rgba(0,0,0,.7);
+}
+.chat-unread-dot.visible{
+  display:flex;
+  align-items:center;
+  justify-content:center;
+}
+
+/* Chat panel — off-screen by default, slides in when .open */
+.chat-panel{
+  position:absolute;
+  top:0;
+  right:0;
+  width:0;           /* collapses when closed */
+  height:100%;
+  background:rgba(10,13,20,.94);
+  border-left:1px solid rgba(99,102,241,.15);
+  backdrop-filter:blur(12px);
+  display:flex;
+  flex-direction:column;
+  z-index:14;        /* above video (z:1) and reactions (z:10) but below ctrl-bar (z:15) */
+  overflow:hidden;
+  transition:width .3s cubic-bezier(.4,0,.2,1);
+  pointer-events:none;
+}
+.chat-panel.open{
+  width:clamp(240px, 25vw, 340px);
+  pointer-events:all;
+}
+
+/* When chat is open, shrink the video area from the right.
+   We target the video element, YT wrapper, and reactions sidebar. */
+#screen-watch.chat-open #movie-video,
+#screen-watch.chat-open #yt-player-wrap{
+  right:clamp(240px, 25vw, 340px);
+  transition:right .3s cubic-bezier(.4,0,.2,1);
+}
+/* Reactions strip shifts left so it doesn't overlap chat panel */
+#screen-watch.chat-open .reactions{
+  right:calc(clamp(240px, 25vw, 340px) + 12px);
+  transition:right .3s cubic-bezier(.4,0,.2,1);
+}
+/* Smooth transition back to full width when chat closes */
+#movie-video, #yt-player-wrap{
+  transition:right .3s cubic-bezier(.4,0,.2,1);
+}
+.reactions{
+  transition:right .3s cubic-bezier(.4,0,.2,1);
+}
+/* Control bar only spans the video area when chat is open */
+#screen-watch.chat-open .ctrl-bar{
+  right:clamp(240px, 25vw, 340px);
+  transition:right .3s cubic-bezier(.4,0,.2,1);
+}
+.ctrl-bar{
+  transition:right .3s cubic-bezier(.4,0,.2,1);
+}
+
+/* ── Chat header ── */
+.chat-header{
+  display:flex;
+  align-items:center;
+  justify-content:space-between;
+  padding:14px 14px 12px;
+  border-bottom:1px solid rgba(99,102,241,.1);
+  flex-shrink:0;
+}
+.chat-title{
+  display:flex;
+  align-items:center;
+  gap:7px;
+  font-size:12px;
+  font-weight:700;
+  letter-spacing:1.5px;
+  text-transform:uppercase;
+  color:var(--text2);
+}
+.chat-close-btn{
+  background:none;
+  border:none;
+  color:var(--text3);
+  cursor:pointer;
+  padding:4px;
+  display:flex;
+  align-items:center;
+  border-radius:6px;
+  transition:color .15s, background .15s;
+}
+.chat-close-btn:hover{
+  color:var(--text);
+  background:rgba(255,255,255,.06);
+}
+
+/* ── Messages container ── */
+.chat-messages{
+  flex:1;
+  overflow-y:auto;
+  overflow-x:hidden;
+  padding:10px 12px;
+  display:flex;
+  flex-direction:column;
+  gap:10px;
+  scroll-behavior:smooth;
+}
+/* Custom scrollbar — thin, matches the dark theme */
+.chat-messages::-webkit-scrollbar{width:4px;}
+.chat-messages::-webkit-scrollbar-track{background:transparent;}
+.chat-messages::-webkit-scrollbar-thumb{background:rgba(99,102,241,.3);border-radius:2px;}
+.chat-messages::-webkit-scrollbar-thumb:hover{background:rgba(99,102,241,.5);}
+
+/* ── Individual message bubbles ── */
+.chat-msg{
+  max-width:92%;
+  display:flex;
+  flex-direction:column;
+  gap:3px;
+  animation:chatMsgIn .18s ease;
+}
+@keyframes chatMsgIn{
+  from{opacity:0;transform:translateY(6px);}
+  to{opacity:1;transform:none;}
+}
+/* Peer messages — left aligned */
+.chat-msg--peer{
+  align-self:flex-start;
+}
+/* Own messages — right aligned */
+.chat-msg--self{
+  align-self:flex-end;
+  align-items:flex-end;
+}
+.chat-msg-meta{
+  display:flex;
+  align-items:baseline;
+  gap:6px;
+}
+.chat-msg-name{
+  font-size:10.5px;
+  font-weight:700;
+  letter-spacing:.3px;
+  color:var(--text3);
+}
+.chat-msg--self .chat-msg-name{
+  color:rgba(99,102,241,.8);
+}
+.chat-msg-time{
+  font-size:9.5px;
+  color:rgba(255,255,255,.22);
+  font-family:'Space Grotesk', monospace;
+}
+.chat-msg-text{
+  padding:8px 11px;
+  border-radius:14px;
+  font-size:13px;
+  line-height:1.5;
+  word-break:break-word;
+  white-space:pre-wrap; /* preserve intentional spacing but no overflow */
+}
+/* Peer bubble style */
+.chat-msg--peer .chat-msg-text{
+  background:rgba(255,255,255,.07);
+  border:1px solid rgba(255,255,255,.07);
+  color:var(--text);
+  border-bottom-left-radius:4px;
+}
+/* Own bubble style */
+.chat-msg--self .chat-msg-text{
+  background:rgba(99,102,241,.22);
+  border:1px solid rgba(99,102,241,.3);
+  color:#e8e9ff;
+  border-bottom-right-radius:4px;
+}
+
+/* ── Input row ── */
+.chat-input-row{
+  display:flex;
+  align-items:center;
+  gap:8px;
+  padding:10px 12px;
+  border-top:1px solid rgba(99,102,241,.1);
+  flex-shrink:0;
+}
+.chat-input{
+  flex:1;
+  background:rgba(255,255,255,.06);
+  border:1px solid rgba(255,255,255,.1);
+  border-radius:22px;
+  padding:9px 14px;
+  font-family:'Nunito', sans-serif;
+  font-size:13px;
+  color:var(--text);
+  outline:none;
+  transition:border-color .2s, box-shadow .2s;
+  min-width:0;
+}
+.chat-input::placeholder{
+  color:rgba(255,255,255,.25);
+  font-size:12.5px;
+}
+.chat-input:focus{
+  border-color:rgba(99,102,241,.5);
+  box-shadow:0 0 0 2px rgba(99,102,241,.12);
+}
+.chat-send-btn{
+  flex-shrink:0;
+  width:34px;
+  height:34px;
+  background:linear-gradient(135deg, var(--primary), var(--accent));
+  border:none;
+  border-radius:50%;
+  display:flex;
+  align-items:center;
+  justify-content:center;
+  cursor:pointer;
+  color:#fff;
+  transition:opacity .15s, transform .12s;
+  box-shadow:0 2px 10px rgba(99,102,241,.35);
+}
+.chat-send-btn:hover:not(:disabled){
+  opacity:.88;
+  transform:scale(1.06);
+}
+.chat-send-btn:disabled{
+  opacity:.3;
+  cursor:not-allowed;
+  transform:none;
+}
+
+/* Mobile: chat panel takes more width on narrow screens */
+@media (max-width:640px){
+  .chat-panel.open{
+    width:min(86vw, 320px);
+  }
+  #screen-watch.chat-open #movie-video,
+  #screen-watch.chat-open #yt-player-wrap,
+  #screen-watch.chat-open .ctrl-bar{
+    right:min(86vw, 320px);
+  }
+  #screen-watch.chat-open .reactions{
+    right:calc(min(86vw, 320px) + 10px);
+  }
+}
+
 /* ── YouTube peer notices (shown in your own card when friend picks YouTube) */
 .yt-peer-notice{
   display:none;

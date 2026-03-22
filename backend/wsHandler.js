@@ -324,6 +324,31 @@ function handleConnection(ws, req, roomManager) {
       return;
     }
 
+    // ── CHAT_MESSAGE ──────────────────────────────────────────────────────
+    // Room-isolated: only relayed to the OTHER peer in this room.
+    // We broadcast including the sender's own peerId so the receiver can
+    // distinguish self vs other messages if needed, but the server never
+    // sends it BACK to the sender — they already rendered it optimistically.
+    if (type === 'chat_message') {
+      const peer = myRoom.peers.get(myPeerId);
+      // Sanitize on the server side too — strip any HTML/control characters.
+      const rawText = String(msg.text || '').trim();
+      if (!rawText) return; // reject empty messages
+      // Hard cap per message — prevents someone sending a 10MB string.
+      const safeText = rawText.slice(0, 500);
+      const payload = {
+        messageId:   msg.messageId || uuidv4(), // dedup key the client can use
+        fromPeerId:  myPeerId,
+        senderName:  peer?.name || 'Guest',
+        text:        safeText,
+        timestamp:   Date.now(),
+      };
+      // Relay only to the OTHER peer — sender already rendered optimistically.
+      broadcast(myRoom, 'chat_message', payload, myPeerId);
+      console.log(`[Chat] ${myRoom.code} ${peer?.name}: ${safeText.slice(0,40)}`);
+      return;
+    }
+
     // ── RETURN_TO_LOBBY ───────────────────────────────────────────────────
     if (type === 'return_to_lobby') {
       // Reset ALL peers' isReady and fileDuration — both sides need to

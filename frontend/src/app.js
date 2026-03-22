@@ -1,5 +1,6 @@
 import { WatchTogetherClient } from './client.js';
 import { VideoCall } from './webrtc.js';
+import { Chat } from './chat.js';
 
 // ── Config ────────────────────────────────────────────────────────────────
 const APP_CONFIG = window.WATCH_TOGETHER_CONFIG ?? {};
@@ -133,6 +134,19 @@ let ytPollingTimer  = null;
 let ytApiLoadPromise  = null;
 let ytPlayerInitPromise = null; // mutex — only one initYtPlayer() runs at a time
 let isSeeking         = false;  // moved to module level so ytPolling can read it
+
+// ── Chat ─────────────────────────────────────────────────────────────────
+// Singleton — created once, mounted when watch screen first becomes active,
+// reset on every room leave so a fresh session starts with an empty log.
+const chat = new Chat({
+  client:      null,          // filled in by wireClientEvents after connect
+  myName:      'You',
+  getPeerName: () => getPeerDisplayName(),
+});
+// Let chat.js surface a subtle toast when a message arrives off-panel.
+// We hook this after showToast is defined — the assignment happens at bottom
+// of module initialisation, here we just reserve the slot.
+window._showChatToast = null; // filled in below showToast definition
 
 const SOFT_SYNC_THRESHOLD_SEC = 0.8;
 const HARD_SYNC_THRESHOLD_SEC = 4;
@@ -882,6 +896,8 @@ function leaveRoomAndGoHome(message = '') {
   clearSyncPlaybackRate();
   // Stop the playback health watchdog — it must not keep firing after we leave
   if (playbackHealthTimer) { clearInterval(playbackHealthTimer); playbackHealthTimer = null; }
+  // Clear chat log and close panel — fresh state for next session
+  chat.reset();
   if (roomMode === 'youtube') {
     if (ytPlayer && ytPlayerReady && typeof ytPlayer.pauseVideo === 'function') { ytPlayer.pauseVideo(); ytPlayer.seekTo(0, true); }
     ytIsPaused = true; ytCurrentTime = 0;
@@ -1033,6 +1049,11 @@ async function connectAndJoin() {
   client = new WatchTogetherClient(SERVER_URL, BACKEND_BASE_URL);
   await client.connect();
   client.join({ roomCode, name: myName, isHost });
+
+  // Give chat the connected client and updated name, then mount the DOM
+  chat.setMyName(myName);
+  chat.wireClient(client);
+  chat.mount(); // idempotent — only builds DOM once
 
   // Wire up all event listeners
   wireClientEvents();
@@ -2037,6 +2058,12 @@ function showToast(msg, variant = 'info') {
   clearTimeout(toastTimer);
   toastTimer = setTimeout(() => syncToast.classList.remove('show'), 4000);
 }
+// Let chat.js show a brief peek-toast when a message arrives while panel is closed.
+// Only fires on the watch screen — lobby toasts are irrelevant for chat.
+window._showChatToast = (msg) => {
+  if (!isWatchScreenActive()) return;
+  showToast(`💬 ${msg}`, 'info');
+};
 
 // ── Action attribution toast ─────────────────────────────────────────────
 // Shown briefly on the watch screen to let both peers know who did what.
