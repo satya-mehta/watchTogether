@@ -875,7 +875,7 @@ input[type=range]#seek-bar::-webkit-slider-thumb{appearance:none;width:14px;heig
   </div>
 </div>
 
-<!-- ═══ LOBBY ════════════════════════════════════════════════════════════ -->
+<!-- ═══ LOBBY ═══════════════════════════════════════════════════════════ -->
 <div class="screen" id="screen-lobby">
   <button class="lobby-back" id="lobby-back-btn" type="button">← back</button>
 
@@ -965,7 +965,7 @@ input[type=range]#seek-bar::-webkit-slider-thumb{appearance:none;width:14px;heig
   <button class="btn-ready" id="ready-btn" disabled>I'm ready 🍿</button>
 </div>
 
-<!-- ═══ WATCH ════════════════════════════════════════════════════════════ -->
+<!-- ═══ WATCH ═══════════════════════════════════════════════════════════ -->
 <div class="screen" id="screen-watch">
 
   <button class="watch-back" id="watch-back-btn" type="button">← Change file</button>
@@ -992,7 +992,7 @@ input[type=range]#seek-bar::-webkit-slider-thumb{appearance:none;width:14px;heig
     <button class="react-btn" data-reaction="😂">😂</button>
     <button class="react-btn" data-reaction="😱">😱</button>
     <button class="react-btn" data-reaction="👏">👏</button>
-    <button class="react-btn" data-reaction="🥹">🥹</button>
+    <button class="react-btn" data-reaction="🤩">🤩</button>
     <button class="react-btn" data-reaction="🌚">🌚</button>
   </div>
 
@@ -1082,7 +1082,7 @@ input[type=range]#seek-bar::-webkit-slider-thumb{appearance:none;width:14px;heig
   <div class="cd-label">Both ready · lights out</div>
 </div>
 
-<!-- ═══ Scripts ════════════════════════════════════════════════════════════ -->
+<!-- ═══ Scripts ══════════════════════════════════════════════════════════ -->
 <script src="config.js"></script>
 <script type="module" src="src/app.js"></script>
 
@@ -1145,9 +1145,9 @@ input[type=range]#seek-bar::-webkit-slider-thumb{appearance:none;width:14px;heig
     window.handleExplicitSeekChange?.(nextPos);
   });
 
-  // ═══════════════════════════════════════════════════════════════════════
+  // ════════════════════════════════════════════════════════════════════════
   // CONTROL BAR AUTO-HIDE
-  // ═══════════════════════════════════════════════════════════════════════
+  // ════════════════════════════════════════════════════════════════════════
   //
   // Design:
   //   - Controls are visible by default.
@@ -1206,7 +1206,7 @@ input[type=range]#seek-bar::-webkit-slider-thumb{appearance:none;width:14px;heig
     return isHoveringCtrl || isInteractingWithControls || !!window._isSeeking;
   }
 
-  // ── Core show/hide ────────────────────────────────────────────────────
+  // ── Core show/hide ──────────────────────────────────────────────────
 
   function showControls() {
     // Cancel any pending hide — only one timer allowed
@@ -1239,7 +1239,7 @@ input[type=range]#seek-bar::-webkit-slider-thumb{appearance:none;width:14px;heig
     }
   }
 
-  // ── Timer management ─────────────────────────────────────────────────
+  // ── Timer management ──────────────────────────────────────────────────
 
   // Arm the single inactivity timer.
   // ALWAYS call clearTimeout before setTimeout so stale timers never stack.
@@ -1255,7 +1255,7 @@ input[type=range]#seek-bar::-webkit-slider-thumb{appearance:none;width:14px;heig
     }, delay);
   }
 
-  // ── Mouse / touch handlers ────────────────────────────────────────────
+  // ── Mouse / touch handlers ──────────────────────────────────────────
 
   // Throttled: only act at most once every THROTTLE_MS.
   // This prevents setTimeout/clearTimeout from firing 120 times/sec
@@ -1267,7 +1267,7 @@ input[type=range]#seek-bar::-webkit-slider-thumb{appearance:none;width:14px;heig
     showControls();
   }
 
-  // ── Play/pause state change ───────────────────────────────────────────
+  // ── Play/pause state change ──────────────────────────────────────────
   //
   // Called whenever the media transitions between playing and paused.
   // - On pause: show controls immediately and cancel any pending hide.
@@ -1296,7 +1296,7 @@ input[type=range]#seek-bar::-webkit-slider-thumb{appearance:none;width:14px;heig
     }
   }
 
-  // ── Event listeners ───────────────────────────────────────────────────
+  // ── Event listeners ──────────────────────────────────────────────────
 
   // document-level listeners use capture so the YouTube IFrame (which sits
   // at z-index:1 and swallows pointer events in its iframe boundary) does
@@ -1351,140 +1351,300 @@ input[type=range]#seek-bar::-webkit-slider-thumb{appearance:none;width:14px;heig
   document.addEventListener('pointerup', handleControlInteractionEnd);
   document.addEventListener('pointercancel', handleControlInteractionEnd);
 
-  // ── Play/pause wiring ─────────────────────────────────────────────────
+  // ── Play/pause wiring ──────────────────────────────────────────────────
 
   mov.addEventListener('play',  onPlayStateChange);
   mov.addEventListener('pause', onPlayStateChange);
 
-  // PiP drag
+  // ── PiP overlay: drag / resize / chat-collision ─────────────────────────
+  //
+  // DRAG vs RESIZE separation:
+  //   - Resize handles (.pip-resize-handle corners) capture pointerdown first
+  //     and call stopPropagation so the drag listener on the bubble never fires.
+  //   - Drag only activates when the pointer lands in the CENTER ZONE —
+  //     the inner 60% × 60% rectangle of the bubble.  Pointer events on the
+  //     outer 20% band (where resize handles live) are ignored for drag.
+  //   - Everything uses Pointer Events (works on mouse AND touch uniformly).
+  //     touch-action:none is set inline during active gestures to suppress
+  //     scroll interference on mobile.
+  //
+  // CHAT COLLISION:
+  //   - A MutationObserver watches #screen-watch for the .chat-open class.
+  //   - On open: if the PiP right edge overlaps the chat panel left edge,
+  //     the bubble is shifted left (via CSS transition on the element itself).
+  //     The original position is saved so it can be restored on close.
+  //   - On close: original position is restored with the same smooth transition.
+  //   - CSS transition is applied only during the shift/restore so normal
+  //     drag/resize remain perfectly crisp with no lag.
+
   const pip = document.getElementById('pip-bubble');
-  const pipResizeHandles = Array.from(document.querySelectorAll('[data-resize]'));
-  let drag=false,ox=0,oy=0;
-  let resizeDir = null;
-  let resizeStart = null;
+
+  // ── Geometry helpers ──────────────────────────────────────────────────
 
   function clampPipPosition(left, top) {
     if (!pip) return { left, top };
-    const rect = pip.getBoundingClientRect();
-    const visibleX = rect.width * 0.2;
-    const visibleY = rect.height * 0.2;
-    const minLeft = visibleX - rect.width;
-    const maxLeft = window.innerWidth - visibleX;
-    const minTop = visibleY - rect.height;
-    const maxTop = window.innerHeight - visibleY;
-
+    const w = pip.offsetWidth;
+    const h = pip.offsetHeight;
+    // Keep at least 20% of the bubble visible on each edge
+    const visX = w * 0.2;
+    const visY = h * 0.2;
     return {
-      left: Math.min(Math.max(left, minLeft), maxLeft),
-      top: Math.min(Math.max(top, minTop), maxTop)
+      left: Math.min(Math.max(left, visX - w), window.innerWidth  - visX),
+      top:  Math.min(Math.max(top,  visY - h), window.innerHeight - visY),
     };
   }
 
   function getPipSizeBounds() {
     return {
-      minWidth: 120,
-      minHeight: 86,
-      maxWidth: Math.min(window.innerWidth * 0.42, 360),
-      maxHeight: Math.min(window.innerHeight * 0.36, 260)
+      minWidth:  120,
+      minHeight:  86,
+      maxWidth:  Math.min(window.innerWidth  * 0.42, 360),
+      maxHeight: Math.min(window.innerHeight * 0.36, 260),
     };
   }
 
   function applyPipPosition(left, top) {
     if (!pip) return;
     const next = clampPipPosition(left, top);
-    pip.style.left = next.left + 'px';
-    pip.style.top = next.top + 'px';
+    pip.style.left  = next.left + 'px';
+    pip.style.top   = next.top  + 'px';
     pip.style.right = 'auto';
   }
 
   function applyPipSize(width, height, left = pip?.offsetLeft ?? 0, top = pip?.offsetTop ?? 0) {
     if (!pip) return;
-    const bounds = getPipSizeBounds();
-    const nextWidth = Math.min(Math.max(width, bounds.minWidth), bounds.maxWidth);
-    const nextHeight = Math.min(Math.max(height, bounds.minHeight), bounds.maxHeight);
-    pip.style.width = nextWidth + 'px';
-    pip.style.height = nextHeight + 'px';
+    const b = getPipSizeBounds();
+    pip.style.width  = Math.min(Math.max(width,  b.minWidth),  b.maxWidth)  + 'px';
+    pip.style.height = Math.min(Math.max(height, b.minHeight), b.maxHeight) + 'px';
     applyPipPosition(left, top);
   }
 
-  pip?.addEventListener('mousedown',e=>{
-    if (e.target.closest('[data-resize]')) return;
-    drag=true;
+  // Returns true if the pointer landed in the draggable center zone.
+  // The outer 20% border band is reserved for resize handles — dragging
+  // there would be ambiguous and is intentionally blocked.
+  function isInDragZone(e) {
+    if (!pip) return false;
     const rect = pip.getBoundingClientRect();
-    ox=e.clientX-rect.left;
-    oy=e.clientY-rect.top;
-    pip.style.cursor='grabbing';
-    pip.style.right='auto';
+    const px = (e.clientX - rect.left) / rect.width;   // 0..1
+    const py = (e.clientY - rect.top)  / rect.height;  // 0..1
+    const BAND = 0.20; // 20% border reserved for resize
+    return px > BAND && px < (1 - BAND) && py > BAND && py < (1 - BAND);
+  }
+
+  // ── Drag state ────────────────────────────────────────────────────────
+  let pipDragging  = false;
+  let pipDragPtId  = null;   // captured pointerId
+  let pipDragOx    = 0;      // pointer offset within bubble at drag start
+  let pipDragOy    = 0;
+
+  pip?.addEventListener('pointerdown', (e) => {
+    // Resize handles stopPropagation — this only fires for non-handle targets.
+    // Additionally guard with the center-zone check.
+    if (!isInDragZone(e)) return;
+
+    pipDragging = true;
+    pipDragPtId = e.pointerId;
+    pip.setPointerCapture(e.pointerId); // track pointer even outside element
+    pip.style.touchAction = 'none';     // prevent scroll on mobile during drag
+
+    const rect = pip.getBoundingClientRect();
+    pipDragOx = e.clientX - rect.left;
+    pipDragOy = e.clientY - rect.top;
+    pip.style.cursor = 'grabbing';
+    pip.style.right  = 'auto';
+
+    // Disable transition during drag so movement is instant
+    pip.style.transition = 'none';
     e.stopPropagation();
   });
-  document.addEventListener('mousemove',e=>{
-    if(!drag || !pip) return;
-    applyPipPosition(e.clientX-ox, e.clientY-oy);
+
+  pip?.addEventListener('pointermove', (e) => {
+    if (!pipDragging || e.pointerId !== pipDragPtId) return;
+    applyPipPosition(e.clientX - pipDragOx, e.clientY - pipDragOy);
   });
-  document.addEventListener('mouseup',()=>{drag=false;if(pip)pip.style.cursor='grab';});
-  pipResizeHandles.forEach((handle) => {
-    handle.addEventListener('mousedown', (e) => {
+
+  pip?.addEventListener('pointerup', (e) => {
+    if (!pipDragging || e.pointerId !== pipDragPtId) return;
+    pipDragging = false;
+    pipDragPtId = null;
+    pip.style.cursor     = 'grab';
+    pip.style.touchAction = '';
+    pip.releasePointerCapture(e.pointerId);
+  });
+
+  pip?.addEventListener('pointercancel', (e) => {
+    if (e.pointerId !== pipDragPtId) return;
+    pipDragging = false;
+    pipDragPtId = null;
+    pip.style.cursor     = 'grab';
+    pip.style.touchAction = '';
+  });
+
+  // ── Resize state ──────────────────────────────────────────────────────
+  let pipResizeDir   = null;
+  let pipResizePtId  = null;
+  let pipResizeStart = null;
+
+  // Attach to each corner handle separately. stopPropagation prevents the
+  // pip pointerdown (drag) listener from also firing for resize gestures.
+  document.querySelectorAll('[data-resize]').forEach((handle) => {
+    handle.addEventListener('pointerdown', (e) => {
       if (!pip) return;
       const rect = pip.getBoundingClientRect();
-      resizeDir = handle.dataset.resize;
-      resizeStart = {
-        x: e.clientX,
-        y: e.clientY,
-        width: rect.width,
-        height: rect.height,
-        left: rect.left,
-        top: rect.top
+      pipResizeDir   = handle.dataset.resize;
+      pipResizePtId  = e.pointerId;
+      pipResizeStart = {
+        x: e.clientX, y: e.clientY,
+        width: rect.width, height: rect.height,
+        left: rect.left,   top:  rect.top,
       };
-      drag = false;
-      pip.style.cursor = getComputedStyle(handle).cursor;
-      e.stopPropagation();
+      handle.setPointerCapture(e.pointerId);
+      handle.style.touchAction = 'none';
+      pip.style.cursor     = getComputedStyle(handle).cursor;
+      pip.style.transition = 'none'; // instant resize — no lag
+      e.stopPropagation(); // prevent pip drag listener from firing
       e.preventDefault();
     });
-  });
-  document.addEventListener('mousemove', (e) => {
-    if (!resizeDir || !resizeStart || !pip) return;
-    const dx = e.clientX - resizeStart.x;
-    const dy = e.clientY - resizeStart.y;
-    const bounds = getPipSizeBounds();
-    let width = resizeStart.width;
-    let height = resizeStart.height;
-    let left = resizeStart.left;
-    let top = resizeStart.top;
 
-    if (resizeDir.includes('e')) width = resizeStart.width + dx;
-    if (resizeDir.includes('s')) height = resizeStart.height + dy;
-    if (resizeDir.includes('w')) {
-      width = resizeStart.width - dx;
-      left = resizeStart.left + dx;
-    }
-    if (resizeDir.includes('n')) {
-      height = resizeStart.height - dy;
-      top = resizeStart.top + dy;
-    }
+    handle.addEventListener('pointermove', (e) => {
+      if (!pipResizeDir || !pipResizeStart || e.pointerId !== pipResizePtId) return;
+      const dx = e.clientX - pipResizeStart.x;
+      const dy = e.clientY - pipResizeStart.y;
+      const b  = getPipSizeBounds();
 
-    width = Math.min(Math.max(width, bounds.minWidth), bounds.maxWidth);
-    height = Math.min(Math.max(height, bounds.minHeight), bounds.maxHeight);
-    if (resizeDir.includes('w')) left = resizeStart.left + (resizeStart.width - width);
-    if (resizeDir.includes('n')) top = resizeStart.top + (resizeStart.height - height);
+      let w    = pipResizeStart.width;
+      let h    = pipResizeStart.height;
+      let left = pipResizeStart.left;
+      let top  = pipResizeStart.top;
 
-    pip.style.width = width + 'px';
-    pip.style.height = height + 'px';
-    applyPipPosition(left, top);
-    e.preventDefault();
+      if (pipResizeDir.includes('e')) w  = pipResizeStart.width  + dx;
+      if (pipResizeDir.includes('s')) h  = pipResizeStart.height + dy;
+      if (pipResizeDir.includes('w')) { w  = pipResizeStart.width  - dx; left = pipResizeStart.left + dx; }
+      if (pipResizeDir.includes('n')) { h  = pipResizeStart.height - dy; top  = pipResizeStart.top  + dy; }
+
+      w = Math.min(Math.max(w, b.minWidth),  b.maxWidth);
+      h = Math.min(Math.max(h, b.minHeight), b.maxHeight);
+      // Recompute anchor after clamping so bubble doesn't jump
+      if (pipResizeDir.includes('w')) left = pipResizeStart.left + (pipResizeStart.width  - w);
+      if (pipResizeDir.includes('n')) top  = pipResizeStart.top  + (pipResizeStart.height - h);
+
+      pip.style.width  = w + 'px';
+      pip.style.height = h + 'px';
+      applyPipPosition(left, top);
+      e.preventDefault();
+    });
+
+    handle.addEventListener('pointerup', (e) => {
+      if (e.pointerId !== pipResizePtId) return;
+      pipResizeDir   = null;
+      pipResizePtId  = null;
+      pipResizeStart = null;
+      handle.releasePointerCapture(e.pointerId);
+      handle.style.touchAction = '';
+      pip.style.cursor = 'grab';
+    });
+
+    handle.addEventListener('pointercancel', (e) => {
+      if (e.pointerId !== pipResizePtId) return;
+      pipResizeDir  = null;
+      pipResizePtId = null;
+      pipResizeStart = null;
+      handle.style.touchAction = '';
+      pip.style.cursor = 'grab';
+    });
   });
-  document.addEventListener('mouseup',()=>{
-    resizeDir = null;
-    resizeStart = null;
-    if(pip) pip.style.cursor='grab';
-  });
+
+  // Keep bubble on-screen when viewport resizes
   window.addEventListener('resize', () => {
     if (!pip) return;
     applyPipSize(pip.offsetWidth, pip.offsetHeight, pip.offsetLeft, pip.offsetTop);
   });
+
   if (pip && 'ResizeObserver' in window) {
-    const pipResizeObserver = new ResizeObserver(() => {
-      applyPipPosition(pip.offsetLeft, pip.offsetTop);
-    });
-    pipResizeObserver.observe(pip);
+    new ResizeObserver(() => applyPipPosition(pip.offsetLeft, pip.offsetTop)).observe(pip);
+  }
+
+  // ── Chat-panel collision detection ────────────────────────────────────
+  //
+  // When the chat panel opens (#screen-watch gets .chat-open), the PiP
+  // bubble — which is position:fixed — may now overlap the chat area.
+  // We detect this and smoothly slide the bubble left so it stays visible.
+  // When chat closes, we restore the saved position.
+  //
+  // Implementation detail: we add a short CSS transition ONLY for the
+  // shift/restore, then remove it immediately after so dragging stays crisp.
+
+  let pipPreChatLeft = null;  // saved left before chat shift
+  let pipPreChatTop  = null;
+
+  function getChatPanelWidth() {
+    // Match the CSS clamp: clamp(240px, 25vw, 340px), mobile: min(86vw, 320px)
+    if (window.innerWidth <= 640) return Math.min(window.innerWidth * 0.86, 320);
+    return Math.min(Math.max(window.innerWidth * 0.25, 240), 340);
+  }
+
+  function onChatOpen() {
+    if (!pip || pip.style.display === 'none') return;
+
+    // Resolve current left/top (bubble may still use right:20px from initial CSS)
+    const rect = pip.getBoundingClientRect();
+    const curLeft = rect.left;
+    const curTop  = rect.top;
+
+    // Ensure left/top are explicitly set (in case right:auto hasn't fired yet)
+    pip.style.right = 'auto';
+    pip.style.left  = curLeft + 'px';
+    pip.style.top   = curTop  + 'px';
+
+    const chatW      = getChatPanelWidth();
+    const chatLeft   = window.innerWidth - chatW;  // left edge of chat panel
+    const pipRight   = curLeft + pip.offsetWidth;
+
+    // Only shift if the PiP actually overlaps the chat panel
+    if (pipRight <= chatLeft) return;
+
+    // Save original position for restore
+    pipPreChatLeft = curLeft;
+    pipPreChatTop  = curTop;
+
+    // Target: move bubble just left of the chat panel, with a small gap
+    const GAP      = 12;
+    const targetLeft = clampPipPosition(chatLeft - pip.offsetWidth - GAP, curTop).left;
+
+    // Enable transition only for this shift
+    pip.style.transition = 'left 0.3s cubic-bezier(.4,0,.2,1), top 0.3s cubic-bezier(.4,0,.2,1)';
+    pip.style.left = targetLeft + 'px';
+
+    // Remove transition once animation completes so drag stays instant
+    pip.addEventListener('transitionend', () => { pip.style.transition = 'none'; }, { once: true });
+  }
+
+  function onChatClose() {
+    if (!pip || pipPreChatLeft === null) return;
+
+    const restoreLeft = pipPreChatLeft;
+    const restoreTop  = pipPreChatTop;
+    pipPreChatLeft = null;
+    pipPreChatTop  = null;
+
+    pip.style.transition = 'left 0.3s cubic-bezier(.4,0,.2,1), top 0.3s cubic-bezier(.4,0,.2,1)';
+    const clamped = clampPipPosition(restoreLeft, restoreTop);
+    pip.style.left = clamped.left + 'px';
+    pip.style.top  = clamped.top  + 'px';
+
+    pip.addEventListener('transitionend', () => { pip.style.transition = 'none'; }, { once: true });
+  }
+
+  // Watch #screen-watch for .chat-open being added/removed
+  const watchScreenEl = document.getElementById('screen-watch');
+  if (watchScreenEl) {
+    let wasChatOpen = false;
+    new MutationObserver(() => {
+      const isChatOpen = watchScreenEl.classList.contains('chat-open');
+      if (isChatOpen && !wasChatOpen) onChatOpen();
+      else if (!isChatOpen && wasChatOpen) onChatClose();
+      wasChatOpen = isChatOpen;
+    }).observe(watchScreenEl, { attributes: true, attributeFilter: ['class'] });
   }
 
   // ── Video call pip visibility ─────────────────────────────────────────

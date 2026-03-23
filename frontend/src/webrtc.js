@@ -33,10 +33,64 @@
  *   ended                {}
  */
 
+// ── ICE / TURN configuration ──────────────────────────────────────────────
+//
+// ICE (Interactive Connectivity Establishment) works in three layers,
+// tried in order from cheapest to most expensive:
+//
+//   1. host candidates      — direct LAN IP. Works only when both peers are
+//                             on the same local network (rare for real users).
+//
+//   2. srflx candidates     — public IP discovered via STUN. Works for ~80%
+//                             of connections: home routers, basic NATs, most
+//                             mobile networks. Zero bandwidth cost.
+//
+//   3. relay candidates     — media routed through a TURN server. Required
+//                             for the remaining ~15–20%: symmetric NAT,
+//                             corporate firewalls, carrier-grade NAT (mobile
+//                             operators like Jio/BSNL in India), or any
+//                             network that blocks all inbound UDP.
+//
+// HOW FALLBACK ACTUALLY WORKS:
+//   The browser runs ICE connectivity checks on ALL gathered candidates in
+//   parallel, ranked by priority (host > srflx > relay). It picks the
+//   highest-priority pair that succeeds. TURN is never used unless every
+//   direct path fails — so for the 80% of users who can connect directly,
+//   the TURN server is contacted to allocate a relay address (during
+//   pre-gathering) but is never used to carry actual media. Cost = zero.
+//
+// WHEN TURN IS ACTUALLY TRIGGERED:
+//   • One or both peers are behind a symmetric NAT (common on 4G/5G)
+//   • Corporate or university network blocking UDP entirely
+//   • Carrier-grade NAT (CGNAT) — very common on Indian mobile operators
+//   • VPN in use that blocks P2P UDP
+//   Without a working TURN server, these users see ICE failed and cannot call.
+//
+// WHY OPENRELAY:
+//   openrelay.metered.ca is the public demo relay from the Metered.ca team.
+//   Credentials are intentionally public — it is meant for exactly this use
+//   case: open-source and personal projects that need a free relay without
+//   account setup. It is less reliable than a private account (shared
+//   bandwidth, no SLA) but is fully functional and covers all transport
+//   protocols. Upgrade path: create a free Metered.ca account and swap in
+//   your private credentials when you want a guaranteed SLA.
+//
 const ICE_SERVERS = [
+  // ── STUN (free, unlimited, no credentials needed) ────────────────────
+  // Multiple providers for redundancy — if Google's STUN is blocked,
+  // Cloudflare's will succeed. Both run on standard UDP port 3478/19302.
   { urls: 'stun:stun.l.google.com:19302' },
   { urls: 'stun:stun1.l.google.com:19302' },
   { urls: 'stun:stun.cloudflare.com:3478' },
+  { urls: 'stun:stun2.l.google.com:19302' },
+
+  // ── TURN — OpenRelay public server (free, no account needed) ─────────
+  // Four entries cover every transport protocol so no firewall can block all:
+  //   :80  UDP  — primary; low latency, most routers allow it
+  //   :443 UDP  — fallback; some firewalls allow 443 UDP when :80 is blocked
+  //   :443 TCP  — fallback; works when UDP is blocked entirely
+  //   turns:443 — TLS-encrypted relay; works on the strictest firewalls that
+  //               only allow HTTPS traffic (indistinguishable from a website)
   {
     urls: 'turn:openrelay.metered.ca:80',
     username: 'openrelayproject',
@@ -49,6 +103,11 @@ const ICE_SERVERS = [
   },
   {
     urls: 'turn:openrelay.metered.ca:443?transport=tcp',
+    username: 'openrelayproject',
+    credential: 'openrelayproject',
+  },
+  {
+    urls: 'turns:openrelay.metered.ca:443',
     username: 'openrelayproject',
     credential: 'openrelayproject',
   },
@@ -91,19 +150,19 @@ const QUALITY_TIERS = {
 };
 
 // How many consecutive poor samples before stepping down a tier
-const DOWNGRADE_THRESHOLD   = 3;
+const DOWNGRADE_THRESHOLD        = 3;
 // How many consecutive good samples before stepping up a tier
-const UPGRADE_THRESHOLD     = 8;
+const UPGRADE_THRESHOLD          = 8;
 // Polling interval for quality stats (ms)
-const QUALITY_POLL_MS       = 3000;
+const QUALITY_POLL_MS            = 3000;
 // Packet loss % above which we consider quality poor
-const LOSS_BAD_PCT          = 8;
+const LOSS_BAD_PCT               = 8;
 // Packet loss % below which we consider quality good enough to upgrade
-const LOSS_GOOD_PCT         = 2;
+const LOSS_GOOD_PCT              = 2;
 // Round-trip time (ms) above which quality is poor
-const RTT_BAD_MS            = 400;
+const RTT_BAD_MS                 = 400;
 // Round-trip time (ms) below which quality is good
-const RTT_GOOD_MS            = 200;
+const RTT_GOOD_MS                = 200;
 // Minimum time (ms) between quality tier changes to avoid thrashing
 const QUALITY_CHANGE_COOLDOWN_MS = 12000;
 
@@ -335,7 +394,20 @@ export class VideoCall extends EventTarget {
     if (this.pc) this.pc.close();
     this._makingOffer = false;
 
-    this.pc = new RTCPeerConnection({ iceServers: ICE_SERVERS });
+    // iceTransportPolicy: 'all' — allow both direct (host/srflx) and relay
+    // (TURN) candidates. The browser always tries direct paths first; relay
+    // is only selected if no direct path succeeds. Setting this explicitly
+    // makes the policy visible and prevents accidental relay-only configs.
+    //
+    // iceCandidatePoolSize: 10 — pre-gather candidates in the background
+    // before the call even starts. By the time the peer clicks "ready",
+    // all STUN and TURN relay addresses are already allocated. This removes
+    // the 1–3 second visible gathering delay from call setup time.
+    this.pc = new RTCPeerConnection({
+      iceServers:           ICE_SERVERS,
+      iceTransportPolicy:   'all',
+      iceCandidatePoolSize: 10,
+    });
 
     const tracks = this.localStream?.getTracks() ?? [];
     if (tracks.length > 0) {
@@ -398,9 +470,31 @@ export class VideoCall extends EventTarget {
       };
     };
 
+    // ── ICE candidate gathering + connection-type logging ─────────────
+    //
+    // onicecandidate fires once per gathered candidate.
+    // candidate.type tells us which layer was used:
+    //   'host'  — local LAN IP, no internet traversal needed
+    //   'srflx' — server-reflexive (STUN); public IP, basic NAT traversal
+    //   'relay' — TURN relay; browser could not find any direct path
+    //
+    // Logging relay candidates here does NOT mean TURN is being used for
+    // media — it just means the browser allocated a relay address as a
+    // fallback option. Whether relay is actually selected depends on which
+    // candidate pair succeeds during connectivity checks (logged below in
+    // oniceconnectionstatechange via _logSelectedCandidatePair).
     this.pc.onicecandidate = (event) => {
       if (event.candidate) {
+        const { type, protocol, address } = event.candidate;
+        const label =
+          type === 'relay'  ? '🔄 relay (TURN)'  :
+          type === 'srflx'  ? '🌐 srflx (STUN)'  :
+          type === 'host'   ? '🏠 host (local)'   : type;
+        console.log(`[ICE] Gathered candidate: ${label} | ${protocol} | ${address ?? '(hidden)'}`);
         this.client.sendSignal({ type: 'ice_candidate', candidate: event.candidate });
+      } else {
+        // null candidate = gathering complete
+        console.log('[ICE] Candidate gathering complete');
       }
     };
 
@@ -414,6 +508,9 @@ export class VideoCall extends EventTarget {
         this._disconnectTimer = null;
         this._iceRestartCount = 0;
         this._emit('connected');
+        // Log which candidate pair was actually selected so we know whether
+        // TURN relay is being used for this call's media path.
+        this._logSelectedCandidatePair();
         // Start quality monitoring once we have a stable connection
         this._startQualityMonitor();
       } else if (state === 'failed') {
@@ -450,6 +547,66 @@ export class VideoCall extends EventTarget {
     this.pc.onnegotiationneeded = async () => {
       await this._createOffer();
     };
+  }
+
+  // ── Selected candidate pair logger ───────────────────────────────────
+  //
+  // Called once the connection reaches 'connected' or 'completed'.
+  // Reads the active candidate pair from getStats() and logs the exact
+  // connection type being used for media so you can confirm in DevTools
+  // whether TURN relay was selected or a direct path succeeded.
+  //
+  // Example console output:
+  //   [ICE] ✅ Connected via: srflx ↔ srflx  (STUN — direct P2P)
+  //   [ICE] ✅ Connected via: relay ↔ srflx  (TURN relay active)
+  //   [ICE] ✅ Connected via: host ↔ host    (LAN — same network)
+  async _logSelectedCandidatePair() {
+    if (!this.pc) return;
+    try {
+      const stats = await this.pc.getStats();
+      let localType  = null;
+      let remoteType = null;
+      let protocol   = null;
+      let rttMs      = null;
+
+      // Build a lookup map of all candidates by their statsId so we can
+      // resolve the local/remote candidate from the winning candidate pair.
+      const candidates = {};
+      stats.forEach(report => {
+        if (report.type === 'local-candidate' || report.type === 'remote-candidate') {
+          candidates[report.id] = report;
+        }
+      });
+
+      stats.forEach(report => {
+        if (report.type === 'candidate-pair' && report.nominated) {
+          const local  = candidates[report.localCandidateId];
+          const remote = candidates[report.remoteCandidateId];
+          localType  = local?.candidateType  ?? '?';
+          remoteType = remote?.candidateType ?? '?';
+          protocol   = local?.protocol       ?? '?';
+          rttMs      = typeof report.currentRoundTripTime === 'number'
+            ? Math.round(report.currentRoundTripTime * 1000)
+            : null;
+        }
+      });
+
+      if (!localType) {
+        console.log('[ICE] ✅ Connected (candidate pair details unavailable in this browser)');
+        return;
+      }
+
+      const isRelay = localType === 'relay' || remoteType === 'relay';
+      const tag     = isRelay ? '🔄 TURN relay active' : '⚡ Direct P2P (no relay)';
+      const rttStr  = rttMs !== null ? ` | RTT ${rttMs}ms` : '';
+      console.log(`[ICE] ✅ Connected via: ${localType} ↔ ${remoteType} | ${protocol}${rttStr} — ${tag}`);
+
+      if (isRelay) {
+        console.warn('[ICE] ⚠️  TURN is carrying media. Call quality depends on relay bandwidth.');
+      }
+    } catch {
+      // getStats() can fail if the PC closed between 'connected' and the async read
+    }
   }
 
   // ── Offer / Answer ────────────────────────────────────────────────────
@@ -630,9 +787,9 @@ export class VideoCall extends EventTarget {
   }
 
   _extractQualityMetrics(stats) {
-    let lossPercent = 0;
-    let rttMs = 0;
-    let foundOutbound = false;
+    let lossPercent     = 0;
+    let rttMs           = 0;
+    let foundOutbound   = false;
     let foundCandidatePair = false;
 
     stats.forEach(report => {
