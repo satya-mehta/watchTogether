@@ -172,7 +172,7 @@ const QUALITY_CHANGE_COOLDOWN_MS = 12000;
 // intervention. Firing a restart at 2500ms was cancelling recoveries that
 // would have succeeded on their own, creating the endless
 // disconnect→restart→peer_left→peer_joined loop visible in the logs.
-const ICE_DISCONNECT_RESTART_DELAY_MS = 7000;
+const ICE_DISCONNECT_RESTART_DELAY_MS = 8500;
 
 export class VideoCall extends EventTarget {
   constructor(client, localEl, remoteEl) {
@@ -209,12 +209,6 @@ export class VideoCall extends EventTarget {
     // Wire incoming signals
     this._unsubscribeClientEvents.push(
       this.client.listen('webrtc_signal', (data) => this._onSignal(data.signal))
-    );
-
-    this._unsubscribeClientEvents.push(
-      this.client.listen('peer_joined', () => {
-        if (this.isInitiator && this._started) this._createOffer();
-      }, { replayBuffered: false })
     );
   }
 
@@ -256,6 +250,11 @@ export class VideoCall extends EventTarget {
     this._armRemoteStreamWatchdog();
     this._emit('started', { hasVideo: this.hasVideo, hasAudio: this.hasAudio });
     this._emit('show_pip');
+    if (this.isInitiator) {
+      queueMicrotask(() => {
+        if (this._started && this.pc) this._createOffer();
+      });
+    }
   }
 
   toggleMute() {
@@ -352,6 +351,11 @@ export class VideoCall extends EventTarget {
   get hasVideo() { return (this.localStream?.getVideoTracks().length ?? 0) > 0; }
   get hasAudio() { return (this.localStream?.getAudioTracks().length ?? 0) > 0; }
   get qualityTier() { return this._currentTier; }
+  get iceState() { return this.pc?.iceConnectionState || 'new'; }
+
+  requestOffer({ iceRestart = false } = {}) {
+    return this._createOffer({ iceRestart });
+  }
 
   end() {
     this._stopQualityMonitor();
@@ -545,6 +549,7 @@ export class VideoCall extends EventTarget {
     };
 
     this.pc.onnegotiationneeded = async () => {
+      if (!this.isInitiator) return;
       await this._createOffer();
     };
   }
@@ -611,8 +616,9 @@ export class VideoCall extends EventTarget {
 
   // ── Offer / Answer ────────────────────────────────────────────────────
 
-  async _createOffer() {
+  async _createOffer({ iceRestart = false } = {}) {
     if (!this.pc) return;
+    if (!this.isInitiator) return;
     if (this._makingOffer) {
       console.log('[WebRTC] Skipping redundant _createOffer (already making one)');
       return;
@@ -623,6 +629,7 @@ export class VideoCall extends EventTarget {
       const offer = await this.pc.createOffer({
         offerToReceiveVideo: true,
         offerToReceiveAudio: true,
+        iceRestart,
       });
       if (this.pc.signalingState !== 'stable') {
         console.warn('[WebRTC] signalingState changed before setLocalDescription — aborting offer');
@@ -630,7 +637,7 @@ export class VideoCall extends EventTarget {
       }
       await this.pc.setLocalDescription(offer);
       this.client.sendSignal({ type: 'offer', sdp: offer });
-      console.log('[WebRTC] Offer sent');
+      console.log(iceRestart ? '[WebRTC] ICE restart offer sent' : '[WebRTC] Offer sent');
     } catch (err) {
       console.error('[WebRTC] createOffer failed:', err);
     } finally {
@@ -716,15 +723,10 @@ export class VideoCall extends EventTarget {
     }
 
     try {
-      this._makingOffer = true;
-      const offer = await this.pc.createOffer({ iceRestart: true });
-      await this.pc.setLocalDescription(offer);
-      this.client.sendSignal({ type: 'offer', sdp: offer });
-      console.log(`[WebRTC] ICE restart offer sent (attempt ${this._iceRestartCount}/${MAX_RESTARTS})`);
+      console.log(`[WebRTC] Requesting ICE restart (attempt ${this._iceRestartCount}/${MAX_RESTARTS})`);
+      await this._createOffer({ iceRestart: true });
     } catch (err) {
       console.error('[WebRTC] ICE restart failed:', err);
-    } finally {
-      this._makingOffer = false;
     }
   }
 

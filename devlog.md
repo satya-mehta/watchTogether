@@ -384,6 +384,78 @@ A daily record of bugs found, root causes, and fixes applied.
 - Restores from saved coordinates with the same smooth transition, then cleans up state.
 - If the user manually dragged the bubble after chat opened, `pipPreChatLeft` still holds the pre-chat position and restores to that, not the dragged position. This is intentional — the bubble returns to where it was before the disruption makes it smooth.
 
+### Follow-up fixes (same day, day 8) — reconnect architecture, smart resume, and UI polish
+
+**WebSocket reconnects were being treated like real leaves**
+- Problem: A temporary socket drop immediately became `peer_left`, which paused playback, ended the call, and then `peer_joined` on reconnect started everything again. This created the classic disconnect → reconnect → restart loop.
+- Fix: Separated three layers explicitly:
+  - signaling state
+  - room presence state
+  - WebRTC call state
+- Added stable `participantId` persisted in local storage and sent on every join. The server now reuses the same participant slot instead of inventing a new peer identity on reconnect.
+- Replaced the old presence behavior with:
+  - `peer_joined` = first join only
+  - `peer_reconnecting` = temporary disconnect
+  - `peer_reconnected` = recovered connection
+  - `peer_left` = only after reconnect grace timeout or explicit leave
+- Backend heartbeat was relaxed and `ws.on('close')` no longer emits `peer_left` immediately. It marks the peer reconnecting, starts a grace timer, and only finalizes the leave if recovery never happens.
+
+**Presence events were coupled too tightly to call lifecycle**
+- Problem: Presence changes were effectively acting like call commands. A room reconnect could pause media, tear down WebRTC, and restart the call even though the peer had never intentionally left.
+- Fix: Call start/end is now intentional:
+  - call starts from ready/countdown flow
+  - call ends on explicit leave or prolonged WebRTC failure
+- Removed the old `peer_joined -> createOffer()` behavior. Renegotiation is no longer driven by generic room joins.
+
+**Reconnect recovery was too aggressive**
+- Problem: On `peer_reconnected`, the app immediately triggered resume logic even when ICE had already recovered by itself. That caused unnecessary renegotiation, flicker, and small call restarts.
+- Fix: Added smart resume rules:
+  - only consider resume while `callState === 'active'`
+  - do not resume if ICE is already `connected` / `completed`
+  - treat `disconnected` as a grace state, not immediate failure
+  - only resume on `failed` or on `disconnected/checking` that stays unhealthy long enough
+- Added timer cleanup and dedupe guards so reconnect timers and resume timers cannot stack.
+- Added `isResuming` lock plus an execution-time ICE re-check so a delayed resume cancels itself if the call self-recovers before the timer fires.
+- Resume remains initiator-owned to avoid glare, but a delayed peer-side fallback can request `call_resume_needed` if the host is slow.
+
+**Display name generation and editing moved fully to the frontend**
+- Problem: Name generation depended on backend logic and the UI did not have a clean local profile flow.
+- Fix: Moved adjective/noun name generation to `frontend/src/profile.js`, persisted it in local storage, and added inline name editing on landing and lobby screens.
+- Name changes now update local state first, refresh UI immediately, and only then emit the rename event. This removes the race where chat could still use the previous name right after an edit.
+
+**Chat trusted sender names too much**
+- Problem: Incoming chat messages used the `senderName` inside the payload, so a fast rename followed by a message could still render stale names.
+- Fix: Chat now keys messages by `participantId`, keeps a participantId → name map in the frontend, and resolves display names from local state instead of trusting the incoming message name.
+- Existing rendered messages also update when a rename event arrives.
+
+**Media toggle state could desync after reconnect**
+- Problem: If mic/camera state changed near a reconnect window, the UI on the other side could miss the latest state.
+- Fix: Added `sync_media_state` as a lightweight UI-only resync event. On reconnect/signaling recovery, each client re-broadcasts its current mic/camera state so the peer UI snaps back into sync without renegotiating WebRTC.
+
+**Watch-screen UI polish and interaction fixes**
+- Version badge:
+  - Problem: The version badge appeared on the watch/player screen where it added noise.
+  - Fix: Badge visibility is now tied to active screen state and only shown on landing/lobby.
+- Mobile fullscreen:
+  - Problem: orientation lock could throw on unsupported browsers.
+  - Fix: `screen.orientation?.lock('landscape').catch(() => {})` now runs only after fullscreen is entered and fails silently.
+- YouTube hover layer:
+  - Problem: the hover-capture overlay solved control visibility but blocked iframe clicks.
+  - Fix: overlay now defaults to `pointer-events:none`, briefly becomes active after movement, then releases again so iframe controls still receive clicks.
+- PiP controls:
+  - Problem: clicking call buttons inside the mini overlay could start drag.
+  - Fix: controls now define their own interaction zone and stop propagation before drag logic sees the event.
+- Skip buttons:
+  - Problem: rapid clicks sent multiple seek events and created sync jitter.
+  - Fix: added a small seek throttle so room sync still works without flooding the network.
+- Camera-off UI:
+  - Problem: rapid camera toggles caused avatar/video flicker.
+  - Fix: camera-off rendering is now debounced before the visual swap.
+
+**Lobby and countdown avatars were not always using the latest renamed initials**
+- Problem: After the new inline name editor landed, the lobby profile block and countdown overlay could show stale initials if the name changed shortly before countdown.
+- Fix: Added a dedicated avatar to the editable lobby profile block and refreshed both local and remote profile renders right before the countdown overlay opens, so lobby and countdown always reflect the latest name.
+
 ---
 
 ## Notes & Known Limitations

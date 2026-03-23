@@ -22,6 +22,24 @@ const KEEPALIVE_INTERVAL_MS = 600000;
 // this long so the local video element has time to seek before we start
 // reporting our position again. Avoids the phantom-drift feedback loop.
 const SYNC_SUPPRESS_AFTER_SEEK_MS = 1500;
+const PARTICIPANT_ID_STORAGE_KEY = 'watchTogetherParticipantId';
+
+function generateParticipantId() {
+  if (typeof globalThis.crypto?.randomUUID === 'function') return globalThis.crypto.randomUUID();
+  return `pt-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
+}
+
+function getOrCreateParticipantId() {
+  try {
+    const existing = window.localStorage?.getItem(PARTICIPANT_ID_STORAGE_KEY);
+    if (existing) return existing;
+    const created = generateParticipantId();
+    window.localStorage?.setItem(PARTICIPANT_ID_STORAGE_KEY, created);
+    return created;
+  } catch {
+    return generateParticipantId();
+  }
+}
 
 class WatchTogetherClient extends EventTarget {
   constructor(serverUrl, backendBaseUrl = null) {
@@ -30,6 +48,7 @@ class WatchTogetherClient extends EventTarget {
     this.backendBaseUrl = backendBaseUrl;
     this.ws             = null;
     this.peerId         = null;
+    this.participantId  = getOrCreateParticipantId();
     this.roomCode       = null;
     this.syncTimer      = null;
     this.keepaliveTimer = null;
@@ -38,6 +57,7 @@ class WatchTogetherClient extends EventTarget {
     this._shouldReconnect     = true;
     this._listenerCounts      = new Map();
     this._bufferedWebrtcSignals = [];
+    this._isReconnectAttempt  = false;
 
     // BUG FIX: track when to suppress sync_check sends (after seek/nudge)
     this._syncSuppressUntil = 0;
@@ -53,6 +73,8 @@ class WatchTogetherClient extends EventTarget {
         console.log('[WT] Connected');
         this._reconnectDelay = 1000;
         this._startKeepalive();
+        this._emit('signaling_state', { state: 'connected', resumed: this._isReconnectAttempt });
+        this._isReconnectAttempt = false;
         resolve();
       };
 
@@ -68,12 +90,14 @@ class WatchTogetherClient extends EventTarget {
       this.ws.onclose = () => {
         if (!this._shouldReconnect) {
           console.log('[WT] Disconnected');
+          this._emit('signaling_state', { state: 'disconnected' });
           this._emit('disconnected');
           this._stopSync();
           this._stopKeepalive();
           return;
         }
         console.warn('[WT] Disconnected — reconnecting in', this._reconnectDelay, 'ms');
+        this._emit('signaling_state', { state: 'reconnecting' });
         this._emit('disconnected');
         this._stopSync();
         this._stopKeepalive();
@@ -87,17 +111,15 @@ class WatchTogetherClient extends EventTarget {
 
   async _reconnect() {
     try {
+      this._isReconnectAttempt = true;
       await this.connect();
       if (this.roomCode) {
-        // BUG FIX: wait 2s before re-joining after a reconnect.
-        // The server heartbeat runs every 5s and only evicts dead sockets on
-        // the NEXT ping after a missed pong. If we reconnect and immediately
-        // try to join, the stale socket for our old peer slot may still be
-        // alive in the server's peer map — we get 'Room full' and are ejected.
-        // Waiting 2s gives the heartbeat a chance to terminate the dead socket
-        // and free the slot before we attempt to rejoin.
-        await new Promise(r => setTimeout(r, 2000));
-        this._send('join', { roomCode: this.roomCode, name: this._myName, isHost: this._isHost });
+        this._send('join', {
+          roomCode: this.roomCode,
+          name: this._myName,
+          isHost: this._isHost,
+          participantId: this.participantId,
+        });
       }
     } catch { /* will retry via onclose */ }
   }
@@ -108,7 +130,12 @@ class WatchTogetherClient extends EventTarget {
     this.roomCode = roomCode;
     this._myName  = name;
     this._isHost  = isHost;
-    this._send('join', { roomCode, name, isHost });
+    this._send('join', { roomCode, name, isHost, participantId: this.participantId });
+  }
+
+  updateName(name) {
+    this._myName = name;
+    this._send('update_name', { name });
   }
 
   fileReady(durationSec, fileName = null) {
@@ -145,7 +172,11 @@ class WatchTogetherClient extends EventTarget {
   // and later deduplicate if it somehow arrives back via a relay.
   sendChat(text) {
     const messageId = `${Date.now()}-${Math.random().toString(36).slice(2,8)}`;
-    this._send('chat_message', { text, messageId });
+    this._send('chat_message', {
+      text,
+      messageId,
+      participantId: this.participantId,
+    });
     return messageId;
   }
 
@@ -155,6 +186,26 @@ class WatchTogetherClient extends EventTarget {
 
   returnToLobby() {
     this._send('return_to_lobby');
+  }
+
+  requestCallResume() {
+    this._send('call_resume_needed');
+  }
+
+  sendCameraToggle({ isCameraOn, isMicOn }) {
+    this._send('camera_toggle', { isCameraOn, isMicOn });
+  }
+
+  sendMicToggle({ isCameraOn, isMicOn }) {
+    this._send('mic_toggle', { isCameraOn, isMicOn });
+  }
+
+  syncMediaState({ isCameraOn, isMicOn }) {
+    this._send('sync_media_state', {
+      participantId: this.participantId,
+      isCameraOn,
+      isMicOn,
+    });
   }
 
   setPositionGetter(fn) {
@@ -208,14 +259,27 @@ class WatchTogetherClient extends EventTarget {
       case 'joined':
         this.peerId = rest.yourPeerId;
         this._emit('joined', rest);
+        if (rest.rejoined) this._emit('rejoined', rest);
         break;
 
       case 'peer_joined':
         this._emit('peer_joined', rest);
         break;
 
+      case 'peer_reconnecting':
+        this._emit('peer_reconnecting', rest);
+        break;
+
+      case 'peer_reconnected':
+        this._emit('peer_reconnected', rest);
+        break;
+
       case 'peer_left':
         this._emit('peer_left', rest);
+        break;
+
+      case 'peer_name_updated':
+        this._emit('peer_name_updated', rest);
         break;
 
       case 'peer_file_ready':
@@ -268,6 +332,18 @@ class WatchTogetherClient extends EventTarget {
         this._emit('chat_message', rest);
         break;
 
+      case 'camera_toggle':
+        this._emit('camera_toggle', rest);
+        break;
+
+      case 'mic_toggle':
+        this._emit('mic_toggle', rest);
+        break;
+
+      case 'sync_media_state':
+        this._emit('sync_media_state', rest);
+        break;
+
       case 'webrtc_signal':
         if ((this._listenerCounts.get('webrtc_signal') || 0) > 0) {
           this._emit('webrtc_signal', rest);
@@ -277,6 +353,10 @@ class WatchTogetherClient extends EventTarget {
             this._bufferedWebrtcSignals.shift();
           }
         }
+        break;
+
+      case 'call_resume_needed':
+        this._emit('call_resume_needed', rest);
         break;
 
       case 'return_to_lobby':
@@ -369,6 +449,7 @@ class WatchTogetherClient extends EventTarget {
     this._bufferedWebrtcSignals.length = 0;
     this._stopSync();
     this._stopKeepalive();
+    this._send('leave_room');
     this.ws?.close();
     this.ws = null;
   }

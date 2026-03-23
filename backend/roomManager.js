@@ -2,11 +2,9 @@ const { v4: uuidv4 } = require('uuid');
 
 // ── Room code generator ────────────────────────────────────────────────────
 const ADJECTIVES = ['COOL','NIGHT','SOFT','CALM','SWEET','LAZY','COZY','WILD','DARK','BRIGHT','VELVET','CRISP','MELLOW','SILVER'];
-const NOUNS      = ['NOOK','DEN','SOFA','FILM','DUSK','MOON','STAR','COVE','REEF','GLOW','LOFT','NEST','TIDE','VALE','HAZE','PINE'];
 
 function generateCode() {
   const adj  = ADJECTIVES[Math.floor(Math.random() * ADJECTIVES.length)];
-  const noun = NOUNS[Math.floor(Math.random() * NOUNS.length)];
   const num  = Math.floor(Math.random() * 9000) + 1000;
   return `${adj}-${num}`;
 }
@@ -20,13 +18,27 @@ function generateCode() {
 //    playState: PlayState
 //  }
 //
-//  PeerState = { ws, peerId, name, fileDuration, isReady, isHost }
+//  PeerState = {
+//    ws,
+//    peerId,
+//    participantId,
+//    name,
+//    fileDuration,
+//    isReady,
+//    isHost,
+//    isCameraOn,
+//    isMicOn,
+//    connectionState,
+//    reconnectTimer,
+//    disconnectedAt,
+//  }
 //  PlayState = { playing, positionSec, lastUpdatedAt, masterId }
 
 // How long an empty room is kept alive before GC removes it (10 minutes).
 // This window lets both peers reconnect after a WS drop without losing
 // their room code.
 const EMPTY_ROOM_TTL_MS = 10 * 60 * 1000;
+const PEER_RECONNECT_GRACE_MS = 8000;
 
 class RoomManager {
   constructor() {
@@ -52,6 +64,7 @@ class RoomManager {
         lastUpdatedAt: Date.now(),
         masterId: null,
       },
+      peerReconnectGraceMs: PEER_RECONNECT_GRACE_MS,
     };
     this.rooms.set(id, room);
     this.codeIndex.set(code, id);
@@ -70,31 +83,92 @@ class RoomManager {
   }
 
   // ── Peer management ──────────────────────────────────────────────────────
-  addPeer(room, ws, peerId, name, isHost) {
-    room.peers.set(peerId, {
+  addPeer(room, ws, participantId, name, isHost) {
+    room.peers.set(participantId, {
       ws,
-      peerId,
+      peerId: participantId,
+      participantId,
       name,
       isHost,
       fileDuration: null,
       isReady: false,
+      fileName: null,
+      isCameraOn: true,
+      isMicOn: true,
+      connectionState: 'online',
+      reconnectTimer: null,
+      disconnectedAt: null,
     });
-    if (room.peers.size === 1) room.playState.masterId = peerId;
+    if (room.peers.size === 1) room.playState.masterId = participantId;
     // Clear the empty-room timer — someone joined, room is active again
     room.emptyAt = null;
-    console.log(`[Room] ${room.code}  +peer ${name} (${peerId})  total=${room.peers.size}`);
+    console.log(`[Room] ${room.code}  +peer ${name} (${participantId})  total=${room.peers.size}`);
+    return room.peers.get(participantId);
+  }
+
+  getPeer(room, participantId) {
+    return room?.peers.get(participantId) || null;
+  }
+
+  reconnectPeer(room, participantId, ws, { name = null, isHost = false } = {}) {
+    const peer = room.peers.get(participantId);
+    if (!peer) return null;
+    this.clearReconnectTimer(peer);
+    peer.ws = ws;
+    if (name) peer.name = name;
+    peer.isHost = !!isHost;
+    peer.connectionState = 'online';
+    peer.disconnectedAt = null;
+    room.emptyAt = null;
+    console.log(`[Room] ${room.code}  ~peer ${peer.name} reconnected (${participantId})`);
+    return peer;
+  }
+
+  markPeerReconnecting(room, participantId) {
+    const peer = room.peers.get(participantId);
+    if (!peer) return null;
+    this.clearReconnectTimer(peer);
+    peer.ws = null;
+    peer.connectionState = 'reconnecting';
+    peer.disconnectedAt = Date.now();
+    console.log(`[Room] ${room.code}  ~peer ${peer.name} reconnecting (${participantId})`);
+    return peer;
+  }
+
+  scheduleReconnectExpiry(room, participantId, onExpire) {
+    const peer = room.peers.get(participantId);
+    if (!peer) return null;
+    // Always clear the previous reconnect grace timer before arming a new one.
+    // This prevents stacked expiries during fast disconnect/reconnect cycles.
+    this.clearReconnectTimer(peer);
+    peer.reconnectTimer = setTimeout(() => {
+      peer.reconnectTimer = null;
+      const currentPeer = room.peers.get(participantId);
+      if (!currentPeer || currentPeer.connectionState !== 'reconnecting') return;
+      onExpire(currentPeer);
+    }, room.peerReconnectGraceMs || PEER_RECONNECT_GRACE_MS);
+    return peer.reconnectTimer;
+  }
+
+  clearReconnectTimer(peer) {
+    if (!peer?.reconnectTimer) return;
+    clearTimeout(peer.reconnectTimer);
+    peer.reconnectTimer = null;
   }
 
   removePeer(room, peerId) {
     const peer = room.peers.get(peerId);
+    this.clearReconnectTimer(peer);
     room.peers.delete(peerId);
     console.log(`[Room] ${room.code}  -peer ${peer?.name}  remaining=${room.peers.size}`);
 
     if (room.playState.masterId === peerId && room.peers.size > 0) {
-      room.playState.masterId = [...room.peers.keys()][0];
+      const onlinePeer = [...room.peers.values()].find((p) => p.connectionState === 'online');
+      room.playState.masterId = onlinePeer?.peerId || [...room.peers.keys()][0] || null;
     }
 
     if (room.peers.size === 0) {
+      room.playState.masterId = null;
       // Don't destroy immediately — record when the room became empty and let
       // the GC clean it up after EMPTY_ROOM_TTL_MS. This gives both peers time
       // to reconnect after a WS drop (Render free tier, mobile networks, etc.)
@@ -136,7 +210,11 @@ class RoomManager {
   count() { return this.rooms.size; }
   totalPeers() {
     let n = 0;
-    this.rooms.forEach(r => (n += r.peers.size));
+    this.rooms.forEach((r) => {
+      r.peers.forEach((peer) => {
+        if (peer.connectionState === 'online') n += 1;
+      });
+    });
     return n;
   }
 

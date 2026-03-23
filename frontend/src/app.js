@@ -1,6 +1,12 @@
 import { WatchTogetherClient } from './client.js';
 import { VideoCall } from './webrtc.js';
 import { Chat } from './chat.js';
+import {
+  getDisplayInitials,
+  getOrCreateDisplayName,
+  persistDisplayName,
+  sanitizeDisplayName,
+} from './profile.js';
 
 // ── Config ────────────────────────────────────────────────────────────────
 const APP_CONFIG = window.WATCH_TOGETHER_CONFIG ?? {};
@@ -78,22 +84,47 @@ const roomCodeInput = document.getElementById('room-code-input');
 const readyBtn      = document.getElementById('ready-btn');
 const landingAlert  = document.getElementById('landing-alert');
 const createRoomBtnLabel = createRoomBtn?.querySelector('.btn-label');
+const versionBadge  = document.getElementById('version-badge');
+const landingNameDisplay = document.getElementById('landing-display-name');
+const landingNameInput = document.getElementById('landing-name-input');
+const landingNameEditor = document.getElementById('landing-name-editor');
+const landingNameEditBtn = document.getElementById('landing-name-edit-btn');
+const landingNameSaveBtn = document.getElementById('landing-name-save-btn');
+const landingNameCancelBtn = document.getElementById('landing-name-cancel-btn');
+const landingAvatar = document.getElementById('landing-avatar');
+const lobbyNameDisplay = document.getElementById('lobby-display-name');
+const lobbyProfileAvatar = document.getElementById('lobby-profile-avatar');
+const lobbyNameInput = document.getElementById('lobby-name-input');
+const lobbyNameEditor = document.getElementById('lobby-name-editor');
+const lobbyNameEditBtn = document.getElementById('lobby-name-edit-btn');
+const lobbyNameSaveBtn = document.getElementById('lobby-name-save-btn');
+const lobbyNameCancelBtn = document.getElementById('lobby-name-cancel-btn');
+const yourAvatar = document.getElementById('your-avatar');
+const friendAvatar = document.getElementById('friend-avatar');
+const remoteMicBadge = document.getElementById('remote-mic-badge');
+const remoteNameChip = document.getElementById('remote-name-chip');
+const remoteCamOffName = document.getElementById('remote-cam-off-name');
+const remoteCamOffAvatar = document.getElementById('remote-cam-off-avatar');
+const pipCallControls = document.getElementById('pip-call-controls');
 
 const syncToast     = document.getElementById('sync-toast');
 const reactionBtns  = document.querySelectorAll('[data-reaction]');
+const screenEls = {
+  landing: document.getElementById('screen-landing'),
+  lobby: document.getElementById('screen-lobby'),
+  watch: document.getElementById('screen-watch'),
+};
 
 // ── App state ─────────────────────────────────────────────────────────────
 let client   = null;
 let call     = null;
 let callStarting = false;
 let isHost   = false;
-let myName   = 'You';
+let myName   = getOrCreateDisplayName();
 let myFileName = null;
 let roomCode = null;
 let peerPresent = false;
 let createRoomPending = false;
-let peerLeftTimer = null;        // grace period before tearing down call on peer_left
-const PEER_LEFT_GRACE_MS = 9000; // 9s — enough for a WS reconnect on mobile
 let syncPlaybackRateTimer = null;
 let syncToastCooldownUntil = 0;
 let playbackRetryPending = false;
@@ -120,6 +151,48 @@ let trackRefreshTimeout = null;
 let localSubtitleTrackEl = null;
 let localSubtitleObjectUrl = null;
 let localSubtitleFileName = null;
+const appState = {
+  signalingState: 'disconnected',
+  presenceState: 'offline',
+  callState: 'idle',
+};
+const uiState = {
+  activeScreen: 'landing',
+  editingNameSurface: null,
+};
+const remotePeerState = {
+  participantId: null,
+  name: 'Your friend',
+  isCameraOn: true,
+  isMicOn: true,
+};
+const localMediaState = {
+  isCameraOn: true,
+  isMicOn: true,
+};
+const participantNames = new Map();
+let remoteVideoTrackHidden = false;
+let pendingMediaSyncReason = '';
+let cameraUITimer = null;
+let lastSeekAt = 0;
+const PRESENCE_OFFLINE_TIMEOUT_MS = 10000;
+const RESUME_AFTER_RECOVERY_DELAY_MS = 4000;
+const RESUME_AFTER_ICE_DISCONNECT_DELAY_MS = 8500;
+const RESUME_AFTER_ICE_FAILED_DELAY_MS = 2500;
+const PEER_RESUME_REQUEST_DELAY_MS = 7000;
+const PEER_RESUME_REQUEST_EXTRA_DELAY_MS = 2500;
+const PEER_RESUME_REQUEST_COOLDOWN_MS = 6000;
+const RESUME_LOCK_MS = 6000;
+let presenceOfflineTimer = null;
+let resumeCheckTimer = null;
+let peerResumeRequestTimer = null;
+let resumeLockTimer = null;
+let isResuming = false;
+let lastIceConnectionState = 'new';
+let callHasEverConnected = false;
+let callConnectionAnnounced = false;
+let iceUnhealthySince = 0;
+let lastResumeRequestAt = 0;
 
 // ── YouTube mode state ────────────────────────────────────────────────────
 let roomMode        = 'local';  // 'local' | 'youtube'
@@ -140,8 +213,9 @@ let isSeeking         = false;  // moved to module level so ytPolling can read i
 // reset on every room leave so a fresh session starts with an empty log.
 const chat = new Chat({
   client:      null,          // filled in by wireClientEvents after connect
-  myName:      'You',
+  myName,
   getPeerName: () => getPeerDisplayName(),
+  resolveParticipantName: (participantId, fallbackName) => resolveParticipantName(participantId, fallbackName),
 });
 // Let chat.js surface a subtle toast when a message arrives off-panel.
 // We hook this after showToast is defined — the assignment happens at bottom
@@ -289,6 +363,578 @@ function setSyncStatus(message, tone = 'idle') {
   const syncDot = document.getElementById('sync-dot');
   if (syncLabel) syncLabel.textContent = message;
   if (syncDot) syncDot.className = `sdot ${tone}`;
+}
+
+function setSignalingState(state) {
+  appState.signalingState = state;
+}
+
+function setPresenceState(state) {
+  appState.presenceState = state;
+  peerPresent = state === 'online';
+}
+
+function setCallState(state) {
+  appState.callState = state;
+}
+
+function setActiveScreen(screen) {
+  if (!screenEls[screen]) return;
+  if (uiState.activeScreen !== screen) exitNameEditMode();
+  uiState.activeScreen = screen;
+  Object.entries(screenEls).forEach(([key, element]) => {
+    element?.classList.toggle('active', key === screen);
+  });
+  document.body.dataset.screen = screen;
+  if (versionBadge) versionBadge.hidden = screen === 'watch';
+}
+
+function renderNameEditor(surface, isEditing) {
+  const isLanding = surface === 'landing';
+  const editor = isLanding ? landingNameEditor : lobbyNameEditor;
+  const input = isLanding ? landingNameInput : lobbyNameInput;
+  const display = editor?.querySelector('[data-name-display]');
+  const editRow = editor?.querySelector('[data-name-edit-row]');
+  if (!editor || !input || !display || !editRow) return;
+  display.hidden = isEditing;
+  editRow.hidden = !isEditing;
+  if (isEditing) input.value = myName;
+}
+
+function exitNameEditMode() {
+  uiState.editingNameSurface = null;
+  renderNameEditor('landing', false);
+  renderNameEditor('lobby', false);
+}
+
+function enterNameEditMode(surface) {
+  uiState.editingNameSurface = surface;
+  renderNameEditor('landing', surface === 'landing');
+  renderNameEditor('lobby', surface === 'lobby');
+  const input = surface === 'landing' ? landingNameInput : lobbyNameInput;
+  input?.focus();
+  input?.select();
+}
+
+function renderLocalProfileUI() {
+  const initials = getDisplayInitials(myName);
+  if (landingNameDisplay) landingNameDisplay.textContent = myName;
+  if (lobbyNameDisplay) lobbyNameDisplay.textContent = myName;
+  if (landingAvatar) landingAvatar.textContent = initials;
+  if (lobbyProfileAvatar) lobbyProfileAvatar.textContent = initials;
+  if (yourAvatar) yourAvatar.textContent = initials;
+  const selfTag = document.querySelector('.ptag.pmyself');
+  if (selfTag) selfTag.textContent = `You • ${myName}`;
+  const countdownAvatar = document.getElementById('cd-av-you');
+  if (countdownAvatar) countdownAvatar.textContent = initials;
+  chat.setMyName(myName);
+}
+
+function rememberParticipantName(participantId, nextName) {
+  const safeParticipantId = String(participantId || '').trim();
+  const safeName = sanitizeDisplayName(nextName);
+  if (!safeParticipantId || !safeName) return safeName;
+  participantNames.set(safeParticipantId, safeName);
+  chat.syncParticipantName(safeParticipantId, safeName);
+  return safeName;
+}
+
+function resolveParticipantName(participantId, fallbackName = '') {
+  const safeParticipantId = String(participantId || '').trim();
+  if (safeParticipantId && safeParticipantId === client?.participantId) {
+    return sanitizeDisplayName(myName) || 'You';
+  }
+  return sanitizeDisplayName(
+    participantNames.get(safeParticipantId) ||
+    fallbackName ||
+    (safeParticipantId && safeParticipantId === remotePeerState.participantId ? remotePeerState.name : '') ||
+    document.getElementById('friend-name')?.textContent?.trim() ||
+    'Your friend'
+  ) || 'Your friend';
+}
+
+function clearCameraUITimer() {
+  if (!cameraUITimer) return;
+  clearTimeout(cameraUITimer);
+  cameraUITimer = null;
+}
+
+function applyRemoteCameraState() {
+  const remoteCamOff = document.getElementById('remote-cam-off');
+  const shouldShowCameraOff = !remotePeerState.isCameraOn || remoteVideoTrackHidden;
+  if (remoteCamOff) remoteCamOff.style.display = shouldShowCameraOff ? 'flex' : 'none';
+}
+
+function renderRemoteMediaUI({ immediateCamera = false } = {}) {
+  if (remoteMicBadge) remoteMicBadge.hidden = remotePeerState.isMicOn;
+  if (remoteNameChip) remoteNameChip.textContent = resolveParticipantName(remotePeerState.participantId, remotePeerState.name);
+  if (remoteCamOffName) remoteCamOffName.textContent = resolveParticipantName(remotePeerState.participantId, remotePeerState.name);
+  if (remoteCamOffAvatar) remoteCamOffAvatar.textContent = getDisplayInitials(resolveParticipantName(remotePeerState.participantId, remotePeerState.name));
+
+  if (immediateCamera) {
+    clearCameraUITimer();
+    applyRemoteCameraState();
+    return;
+  }
+
+  // Rapid camera toggles can bounce track state faster than the DOM settles.
+  // Debouncing the avatar/video swap keeps the mini-view from flickering.
+  clearCameraUITimer();
+  cameraUITimer = window.setTimeout(() => {
+    cameraUITimer = null;
+    applyRemoteCameraState();
+  }, 100);
+}
+
+function renderRemoteProfileUI({ immediateCamera = false } = {}) {
+  const remoteName = resolveParticipantName(remotePeerState.participantId, remotePeerState.name);
+  const friendNameEl = document.getElementById('friend-name');
+  if (friendNameEl) {
+    friendNameEl.textContent = remotePeerState.participantId
+      ? remoteName
+      : 'Waiting…';
+  }
+  if (friendAvatar) {
+    friendAvatar.textContent = remotePeerState.participantId
+      ? getDisplayInitials(remoteName)
+      : '?';
+  }
+  const friendTag = document.querySelector('.pfriend');
+  if (friendTag) {
+    friendTag.textContent = remotePeerState.participantId
+      ? `Friend • ${remoteName}`
+      : 'Friend';
+  }
+  const countdownAvatar = document.getElementById('cd-av-them');
+  if (countdownAvatar) {
+    countdownAvatar.textContent = remotePeerState.participantId
+      ? getDisplayInitials(remoteName)
+      : '??';
+  }
+  renderRemoteMediaUI({ immediateCamera });
+}
+
+function updateRemotePeerState(nextState = {}) {
+  const participantId = nextState.participantId || remotePeerState.participantId;
+  const nextName = nextState.name != null
+    ? (rememberParticipantName(participantId, nextState.name) || resolveParticipantName(participantId, nextState.name))
+    : resolveParticipantName(participantId, remotePeerState.name);
+  if (participantId) remotePeerState.participantId = participantId;
+  remotePeerState.name = nextName || 'Your friend';
+  if (typeof nextState.isCameraOn === 'boolean') remotePeerState.isCameraOn = nextState.isCameraOn;
+  if (typeof nextState.isMicOn === 'boolean') remotePeerState.isMicOn = nextState.isMicOn;
+  renderRemoteProfileUI();
+}
+
+function resetRemotePeerState() {
+  clearCameraUITimer();
+  remotePeerState.participantId = null;
+  remotePeerState.name = 'Your friend';
+  remotePeerState.isCameraOn = true;
+  remotePeerState.isMicOn = true;
+  remoteVideoTrackHidden = false;
+  renderRemoteProfileUI({ immediateCamera: true });
+}
+
+function handleNameUpdate({
+  participantId = null,
+  name,
+  isLocal = false,
+  broadcast = false,
+} = {}) {
+  const fallbackName = isLocal ? myName : 'Your friend';
+  const safeName = sanitizeDisplayName(name) || fallbackName;
+  if (isLocal) {
+    const previousName = myName;
+    myName = persistDisplayName(safeName);
+    renderLocalProfileUI();
+    const localParticipantId = participantId || client?.participantId;
+    if (localParticipantId) rememberParticipantName(localParticipantId, myName);
+    exitNameEditMode();
+    if (broadcast && client && myName !== previousName) client.updateName(myName);
+    return myName;
+  }
+
+  const remoteParticipantId = participantId || remotePeerState.participantId;
+  const resolvedName = rememberParticipantName(remoteParticipantId, safeName) || resolveParticipantName(remoteParticipantId, safeName);
+  updateRemotePeerState({
+    participantId: remoteParticipantId,
+    name: resolvedName,
+  });
+  return resolvedName;
+}
+
+function applyLocalDisplayName(nextName, { broadcast = true } = {}) {
+  const normalizedName = sanitizeDisplayName(nextName) || myName;
+  return handleNameUpdate({
+    participantId: client?.participantId,
+    name: normalizedName,
+    isLocal: true,
+    broadcast,
+  });
+}
+
+function saveEditedDisplayName(surface) {
+  const input = surface === 'landing' ? landingNameInput : lobbyNameInput;
+  const normalizedName = sanitizeDisplayName(input?.value);
+  applyLocalDisplayName(normalizedName || myName);
+}
+
+function wireNameEditor(surface, { editBtn, saveBtn, cancelBtn, input } = {}) {
+  editBtn?.addEventListener('click', () => enterNameEditMode(surface));
+  saveBtn?.addEventListener('click', () => saveEditedDisplayName(surface));
+  cancelBtn?.addEventListener('click', () => exitNameEditMode());
+  input?.addEventListener('keydown', (event) => {
+    if (event.key === 'Enter') {
+      event.preventDefault();
+      saveEditedDisplayName(surface);
+      return;
+    }
+    if (event.key === 'Escape') {
+      event.preventDefault();
+      exitNameEditMode();
+    }
+  });
+}
+
+function getOtherPeerSnapshot(peers = [], myPeerId = client?.peerId) {
+  return peers.find((peer) => peer.peerId !== myPeerId) || null;
+}
+
+function canSendRoomControls() {
+  return appState.signalingState === 'connected' && appState.presenceState === 'online';
+}
+
+function syncLocalMediaStateFromCall() {
+  localMediaState.isMicOn = !(call?.isMuted ?? false);
+  localMediaState.isCameraOn = !(call?.isCamOff ?? false);
+}
+
+function queueMediaSync(reason = 'unknown') {
+  pendingMediaSyncReason = reason || pendingMediaSyncReason || 'unknown';
+}
+
+function handleMediaSync({
+  participantId,
+  isCameraOn,
+  isMicOn,
+  broadcast = false,
+} = {}) {
+  if (broadcast) {
+    if (!client || !call) return false;
+    syncLocalMediaStateFromCall();
+    client.syncMediaState({
+      participantId: client.participantId,
+      isCameraOn: localMediaState.isCameraOn,
+      isMicOn: localMediaState.isMicOn,
+    });
+    pendingMediaSyncReason = '';
+    return true;
+  }
+
+  applyPeerMediaState({ participantId, isCameraOn, isMicOn });
+  return true;
+}
+
+function flushQueuedMediaSync() {
+  if (!pendingMediaSyncReason) return false;
+  if (!client || !call) {
+    pendingMediaSyncReason = '';
+    return false;
+  }
+  return handleMediaSync({ broadcast: true });
+}
+
+function broadcastLocalMediaState(eventType = 'camera_toggle') {
+  if (!client || !call) return;
+  syncLocalMediaStateFromCall();
+  const payload = {
+    isCameraOn: localMediaState.isCameraOn,
+    isMicOn: localMediaState.isMicOn,
+  };
+  if (eventType === 'mic_toggle') client.sendMicToggle(payload);
+  else client.sendCameraToggle(payload);
+}
+
+function applyPeerMediaState({ participantId, isCameraOn, isMicOn } = {}) {
+  if (participantId && remotePeerState.participantId && participantId !== remotePeerState.participantId) return;
+  updateRemotePeerState({
+    participantId: participantId || remotePeerState.participantId,
+    name: resolveParticipantName(participantId || remotePeerState.participantId, remotePeerState.name),
+    isCameraOn: typeof isCameraOn === 'boolean' ? isCameraOn : remotePeerState.isCameraOn,
+    isMicOn: typeof isMicOn === 'boolean' ? isMicOn : remotePeerState.isMicOn,
+  });
+}
+
+function clearPresenceOfflineTimer() {
+  if (!presenceOfflineTimer) return;
+  clearTimeout(presenceOfflineTimer);
+  presenceOfflineTimer = null;
+}
+
+function clearResumeCheckTimer() {
+  if (!resumeCheckTimer) return;
+  clearTimeout(resumeCheckTimer);
+  resumeCheckTimer = null;
+}
+
+function clearPeerResumeRequestTimer() {
+  if (!peerResumeRequestTimer) return;
+  clearTimeout(peerResumeRequestTimer);
+  peerResumeRequestTimer = null;
+}
+
+function clearResumeLock() {
+  if (resumeLockTimer) {
+    clearTimeout(resumeLockTimer);
+    resumeLockTimer = null;
+  }
+  isResuming = false;
+}
+
+function beginResumeLock() {
+  clearResumeLock();
+  isResuming = true;
+  resumeLockTimer = window.setTimeout(() => {
+    resumeLockTimer = null;
+    isResuming = false;
+  }, RESUME_LOCK_MS);
+}
+
+function getCurrentIceState() {
+  return call?.iceState || lastIceConnectionState || 'new';
+}
+
+function isIceConnected(state = getCurrentIceState()) {
+  return state === 'connected' || state === 'completed';
+}
+
+function isIceRecoveryState(state = getCurrentIceState()) {
+  return state === 'failed' || state === 'disconnected' || state === 'checking';
+}
+
+function cancelPendingResumeIfRecovered(state = getCurrentIceState()) {
+  if (!isIceConnected(state)) return false;
+  clearResumeCheckTimer();
+  clearPeerResumeRequestTimer();
+  clearResumeLock();
+  return true;
+}
+
+function resetIceRecoveryState() {
+  clearResumeCheckTimer();
+  clearPeerResumeRequestTimer();
+  clearResumeLock();
+  iceUnhealthySince = 0;
+  lastResumeRequestAt = 0;
+}
+
+function markIceUnhealthy(state = getCurrentIceState()) {
+  if (isIceConnected(state)) {
+    iceUnhealthySince = 0;
+    return;
+  }
+  if (!iceUnhealthySince) iceUnhealthySince = Date.now();
+}
+
+function getIceUnhealthyDurationMs(now = Date.now()) {
+  if (!iceUnhealthySince) return 0;
+  return Math.max(0, now - iceUnhealthySince);
+}
+
+function getRemainingIceDisconnectGraceMs(now = Date.now()) {
+  return Math.max(0, RESUME_AFTER_ICE_DISCONNECT_DELAY_MS - getIceUnhealthyDurationMs(now));
+}
+
+function shouldAttemptResume(state = getCurrentIceState(), now = Date.now()) {
+  if (isIceConnected(state)) return false;
+  if (state === 'failed') return true;
+  if (state === 'disconnected' || state === 'checking') {
+    return getIceUnhealthyDurationMs(now) >= RESUME_AFTER_ICE_DISCONNECT_DELAY_MS;
+  }
+  return false;
+}
+
+function getPeerResumeFallbackDelayMs(delayMs = 0) {
+  return Math.max(PEER_RESUME_REQUEST_DELAY_MS, delayMs + PEER_RESUME_REQUEST_EXTRA_DELAY_MS);
+}
+
+function showReconnectingUI(message = 'Reconnecting…') {
+  setSyncStatus(message, 'warn');
+}
+
+function hideReconnectingUI(message = 'Connected again') {
+  setSyncStatus(message, 'ok');
+}
+
+function endCallForOffline({
+  toastMessage = '',
+  toastVariant = 'warn',
+  statusMessage = 'Waiting for your friend to join',
+} = {}) {
+  const hadActiveCall = !!call || ['active', 'connecting'].includes(appState.callState);
+  clearPresenceOfflineTimer();
+  resetIceRecoveryState();
+  if (toastMessage) showToast(toastMessage, toastVariant);
+  call?.end();
+  call = null;
+  callStarting = false;
+  callHasEverConnected = false;
+  callConnectionAnnounced = false;
+  lastIceConnectionState = 'new';
+  lastResumeRequestAt = 0;
+  setCallState(hadActiveCall ? 'ended' : 'idle');
+  resetReadyState({ disable: true });
+  setSyncStatus(statusMessage, 'idle');
+}
+
+function schedulePresenceOfflineTimeout({ name = getPeerDisplayName() } = {}) {
+  // Re-arm the downgrade timer from a clean slate so rapid reconnect cycles
+  // cannot leave multiple offline timers running at once.
+  clearPresenceOfflineTimer();
+  presenceOfflineTimer = window.setTimeout(() => {
+    presenceOfflineTimer = null;
+    if (appState.presenceState === 'online') return;
+    setPresenceState('offline');
+    removePeerFromUI();
+    updatePeerReadyState('friend', false);
+    readyBtn?.classList.remove('peer-wants-you');
+    endCallForOffline({
+      toastMessage: `${name || 'Your friend'} could not reconnect`,
+      toastVariant: 'warn',
+    });
+  }, PRESENCE_OFFLINE_TIMEOUT_MS);
+}
+
+function handleReconnect({ name = getPeerDisplayName() } = {}) {
+  setPresenceState('unstable');
+  showReconnectingUI(`${name || 'Your friend'} is reconnecting…`);
+  schedulePresenceOfflineTimeout({ name });
+}
+
+function handleRecovery({
+  message = 'Connected again',
+  requestResume = true,
+  delayMs = RESUME_AFTER_RECOVERY_DELAY_MS,
+} = {}) {
+  clearPresenceOfflineTimer();
+  setPresenceState('online');
+  hideReconnectingUI(message);
+  if (requestResume) maybeResumeCall({ reason: 'recovery', delayMs });
+}
+
+function maybeResumeCall({ reason = 'unknown', delayMs = 0 } = {}) {
+  if (!client || !call) return;
+  if (appState.callState !== 'active') return;
+  if (appState.signalingState !== 'connected') return;
+  if (appState.presenceState !== 'online') return;
+  const iceState = getCurrentIceState();
+  if (cancelPendingResumeIfRecovered(iceState)) return;
+  if (!isIceRecoveryState(iceState)) return;
+  const effectiveDelayMs = shouldAttemptResume(iceState)
+    ? Math.max(0, delayMs)
+    : Math.max(delayMs, getRemainingIceDisconnectGraceMs());
+
+  if (!isHost) {
+    const requestResumeFromHost = () => {
+      if (!client || !call) return;
+      if (appState.callState !== 'active') return;
+      if (appState.signalingState !== 'connected' || appState.presenceState !== 'online') return;
+      if (cancelPendingResumeIfRecovered()) return;
+      if (!shouldAttemptResume()) return;
+
+      const now = Date.now();
+      if ((now - lastResumeRequestAt) < PEER_RESUME_REQUEST_COOLDOWN_MS) return;
+
+      clearPeerResumeRequestTimer();
+      lastResumeRequestAt = now;
+      console.log(`[Call] Requesting initiator resume (${reason})`);
+      client.requestCallResume();
+    };
+
+    const fallbackDelayMs = getPeerResumeFallbackDelayMs(effectiveDelayMs);
+    clearPeerResumeRequestTimer();
+    peerResumeRequestTimer = window.setTimeout(() => {
+      peerResumeRequestTimer = null;
+      if (cancelPendingResumeIfRecovered()) return;
+      requestResumeFromHost();
+    }, fallbackDelayMs);
+    return;
+  }
+
+  const runResume = async () => {
+    if (!client || !call) return;
+    if (appState.callState !== 'active') return;
+    if (appState.signalingState !== 'connected' || appState.presenceState !== 'online') return;
+    if (cancelPendingResumeIfRecovered()) return;
+    if (!shouldAttemptResume() || isResuming) return;
+
+    beginResumeLock();
+    showReconnectingUI('Re-establishing call…');
+
+    try {
+      await call.requestOffer({ iceRestart: true });
+    } catch (err) {
+      console.warn(`call resume failed (${reason}):`, err?.message || err);
+    }
+  };
+
+  if (effectiveDelayMs > 0) {
+    clearResumeCheckTimer();
+    resumeCheckTimer = window.setTimeout(() => {
+      resumeCheckTimer = null;
+      if (cancelPendingResumeIfRecovered()) return;
+      void runResume();
+    }, effectiveDelayMs);
+    return;
+  }
+
+  void runResume();
+}
+
+function handleCallIceState(state) {
+  lastIceConnectionState = state || 'new';
+
+  if (isIceConnected(state)) {
+    const wasConnected = callHasEverConnected;
+    callHasEverConnected = true;
+    resetIceRecoveryState();
+    if (appState.callState !== 'ended') setCallState('active');
+    if (appState.presenceState === 'online' && appState.signalingState === 'connected') {
+      hideReconnectingUI(wasConnected ? 'Connected again' : 'Call connected');
+    }
+    return;
+  }
+
+  if (!call || appState.callState !== 'active' || !callHasEverConnected) return;
+  markIceUnhealthy(state);
+
+  if (state === 'failed') {
+    showReconnectingUI('Call reconnecting…');
+    maybeResumeCall({ reason: 'ice-failed', delayMs: RESUME_AFTER_ICE_FAILED_DELAY_MS });
+    return;
+  }
+
+  if (state === 'disconnected') {
+    showReconnectingUI(
+      appState.presenceState === 'unstable'
+        ? `${getPeerDisplayName()} is reconnecting…`
+        : 'Call reconnecting…'
+    );
+    maybeResumeCall({
+      reason: 'ice-disconnected',
+      delayMs: getRemainingIceDisconnectGraceMs(),
+    });
+    return;
+  }
+
+  if (state === 'checking') {
+    showReconnectingUI('Re-establishing call…');
+    maybeResumeCall({
+      reason: 'ice-checking',
+      delayMs: getRemainingIceDisconnectGraceMs(),
+    });
+  }
 }
 
 function getVideoDurationSec() {
@@ -587,7 +1233,13 @@ function isWatchScreenActive() {
 
 function shouldSendSyncHeartbeat() {
   const hasSource = roomMode === 'youtube' ? !!ytVideoId : !!movieVideo.src;
-  return Boolean(client && peerPresent && hasSource && isWatchScreenActive());
+  return Boolean(
+    client &&
+    appState.signalingState === 'connected' &&
+    appState.presenceState === 'online' &&
+    hasSource &&
+    isWatchScreenActive()
+  );
 }
 
 function sendPlayPauseCommand(playing, positionSec) {
@@ -826,9 +1478,15 @@ function leaveWatchToLobby({ clearFile = false, keepCall = true, notice = '' } =
     }
   }
   if (!keepCall) {
+    resetIceRecoveryState();
     call?.end();
     call = null;
+    callHasEverConnected = false;
+    callConnectionAnnounced = false;
+    lastIceConnectionState = 'new';
+    lastResumeRequestAt = 0;
     showCallUI(false);
+    setCallState('idle');
   } else if (call) {
     showCallUI(true);
   }
@@ -839,14 +1497,19 @@ function leaveWatchToLobby({ clearFile = false, keepCall = true, notice = '' } =
 }
 
 function getPeerDisplayName() {
-  return document.getElementById('friend-name')?.textContent?.trim() || 'Your friend';
+  return resolveParticipantName(remotePeerState.participantId, remotePeerState.name);
 }
 
-async function ensureVideoCall() {
-  if (!client || call || callStarting || !peerPresent) return;
+async function ensureVideoCall({ force = false } = {}) {
+  if (!client || call || callStarting) return call;
+  if (!force && appState.presenceState !== 'online') return null;
   callStarting = true;
+  setCallState('connecting');
   try {
-    await startVideoCall();
+    return await startVideoCall();
+  } catch (err) {
+    setCallState('ended');
+    throw err;
   } finally {
     callStarting = false;
   }
@@ -873,19 +1536,32 @@ function clearLandingNotice() {
 }
 
 function showLandingScreen() {
-  document.getElementById('screen-lobby')?.classList.remove('active');
-  document.getElementById('screen-watch')?.classList.remove('active');
-  document.getElementById('screen-landing')?.classList.add('active');
+  setActiveScreen('landing');
 }
 
 function resetToLanding(message = '') {
   roomCode = null;
   isHost = false;
-  peerPresent = false;
+  exitNameEditMode();
+  clearPresenceOfflineTimer();
+  resetIceRecoveryState();
+  clearCameraUITimer();
+  participantNames.clear();
+  pendingMediaSyncReason = '';
+  lastSeekAt = 0;
+  callHasEverConnected = false;
+  callConnectionAnnounced = false;
+  lastIceConnectionState = 'new';
+  lastResumeRequestAt = 0;
+  setPresenceState('offline');
+  setSignalingState('disconnected');
+  setCallState('idle');
+  resetRemotePeerState();
   myFileName = null;
   client = null;
   call = null;
   callStarting = false;
+  chat.setMyParticipantId(null);
   roomCodeInput.value = '';
   window.history.replaceState({}, '', '/');
   showLandingScreen();
@@ -894,6 +1570,11 @@ function resetToLanding(message = '') {
 
 function leaveRoomAndGoHome(message = '') {
   clearSyncPlaybackRate();
+  exitNameEditMode();
+  clearPresenceOfflineTimer();
+  resetIceRecoveryState();
+  clearCameraUITimer();
+  pendingMediaSyncReason = '';
   // Stop the playback health watchdog — it must not keep firing after we leave
   if (playbackHealthTimer) { clearInterval(playbackHealthTimer); playbackHealthTimer = null; }
   // Clear chat log and close panel — fresh state for next session
@@ -916,11 +1597,16 @@ function leaveRoomAndGoHome(message = '') {
   }
   resetReadyState({ disable: true });
   setSyncStatus('Pick your video file to check for sync', 'idle');
-  clearTimeout(peerLeftTimer);
-  peerLeftTimer = null;
   call?.end();
   call = null;
   callStarting = false;
+  callHasEverConnected = false;
+  callConnectionAnnounced = false;
+  lastIceConnectionState = 'new';
+  lastResumeRequestAt = 0;
+  setCallState('idle');
+  setPresenceState('offline');
+  setSignalingState('disconnected');
   showCallUI(false);
   client?.disconnect();
   // Reset wiring flag so controls re-register correctly if user creates a new room
@@ -991,6 +1677,28 @@ function checkPlaybackHealth() {
   });
 }
 
+wireNameEditor('landing', {
+  editBtn: landingNameEditBtn,
+  saveBtn: landingNameSaveBtn,
+  cancelBtn: landingNameCancelBtn,
+  input: landingNameInput,
+});
+wireNameEditor('lobby', {
+  editBtn: lobbyNameEditBtn,
+  saveBtn: lobbyNameSaveBtn,
+  cancelBtn: lobbyNameCancelBtn,
+  input: lobbyNameInput,
+});
+renderLocalProfileUI();
+renderRemoteProfileUI();
+setActiveScreen(
+  screenEls.watch?.classList.contains('active')
+    ? 'watch'
+    : screenEls.lobby?.classList.contains('active')
+    ? 'lobby'
+    : 'landing'
+);
+
 // ═════════════════════════════════════════════════════════════════════════════
 // 1. ROOM CREATION / JOINING
 // ═════════════════════════════════════════════════════════════════════════════
@@ -1011,7 +1719,6 @@ createRoomBtn?.addEventListener('click', async () => {
     const data = await res.json();
     roomCode = data.roomCode;
     isHost   = true;
-    myName   = prompt('Your name?') || 'You';
 
     showLobby(roomCode);
     await connectAndJoin();
@@ -1035,7 +1742,6 @@ joinRoomBtn?.addEventListener('click', async () => {
 
     roomCode = code;
     isHost   = false;
-    myName   = prompt('Your name?') || 'Guest';
 
     showLobby(roomCode);
     await connectAndJoin();
@@ -1048,10 +1754,13 @@ joinRoomBtn?.addEventListener('click', async () => {
 async function connectAndJoin() {
   client = new WatchTogetherClient(SERVER_URL, BACKEND_BASE_URL);
   await client.connect();
-  client.join({ roomCode, name: myName, isHost });
+  setSignalingState('connected');
+  participantNames.clear();
+  rememberParticipantName(client.participantId, myName);
 
   // Give chat the connected client and updated name, then mount the DOM
   chat.setMyName(myName);
+  chat.setMyParticipantId(client.participantId);
   chat.wireClient(client);
   chat.mount(); // idempotent — only builds DOM once
 
@@ -1060,6 +1769,7 @@ async function connectAndJoin() {
   wireVideoControls();
   wireReactions();
   wireYouTubeLobby();
+  client.join({ roomCode, name: myName, isHost });
 }
 
 async function autoJoinFromPath() {
@@ -1084,7 +1794,6 @@ async function autoJoinFromPath() {
 
     isHost = false;
     clearLandingNotice();
-    myName = prompt('Your name?') || 'Guest';
 
     showLobby(roomCode);
     await connectAndJoin();
@@ -1099,11 +1808,51 @@ async function autoJoinFromPath() {
 // ═════════════════════════════════════════════════════════════════════════════
 
 function wireClientEvents() {
+  client.on('signaling_state', ({ state, resumed = false }) => {
+    setSignalingState(state);
+    if (state === 'reconnecting') {
+      setSyncStatus('Connection lost — reconnecting…', 'warn');
+      return;
+    }
+    if (state === 'disconnected' && roomCode) {
+      setSyncStatus('Disconnected from room', 'warn');
+      return;
+    }
+    if (state === 'connected' && resumed) {
+      queueMediaSync('signaling-restored');
+      if (appState.presenceState === 'online') setSyncStatus('Connected again', 'ok');
+      else if (appState.presenceState === 'unstable') setSyncStatus('Connected — waiting for your friend to resume', 'warn');
+      else setSyncStatus('Waiting for your friend to join', 'idle');
+    }
+  });
 
   client.on('joined', (data) => {
     console.log('Joined room', data.roomCode, 'as', data.yourPeerId);
-    peerPresent = data.peers.some((peer) => peer.peerId !== data.yourPeerId);
-    updatePeerList(data.peers);
+    rememberParticipantName(client?.participantId, myName);
+    chat.setMyParticipantId(client?.participantId || null);
+    data.peers.forEach((peer) => {
+      rememberParticipantName(peer.participantId || peer.peerId, peer.name);
+    });
+    const otherPeer = getOtherPeerSnapshot(data.peers, data.yourPeerId);
+    if (otherPeer) {
+      addPeerToUI(otherPeer);
+      if (otherPeer.connectionState === 'reconnecting') {
+        handleReconnect({ name: otherPeer.name });
+      } else {
+        clearPresenceOfflineTimer();
+        setPresenceState('online');
+      }
+      updatePeerReadyState(otherPeer.peerId, !!otherPeer.isReady);
+      if (otherPeer.fileDuration) {
+        updatePeerFileStatus(otherPeer.peerId, otherPeer.fileDuration, otherPeer.fileName);
+      }
+    } else {
+      clearPresenceOfflineTimer();
+      setPresenceState('offline');
+      removePeerFromUI();
+      updatePeerReadyState('friend', false);
+    }
+
     // Show file status and ready state for any peer that already has loaded data
     data.peers.forEach(peer => {
       if (peer.peerId !== data.yourPeerId) {
@@ -1115,13 +1864,12 @@ function wireClientEvents() {
         }
       }
     });
-    if (peerPresent) ensureVideoCall();
     // Restore YouTube mode only if BOTH peers are already in the room.
     // If we are the first peer (solo join or fresh room), never auto-load
     // someone else's YouTube state — this prevents cross-room leakage where
     // a stale room snapshot from a previously-active room restores the wrong
     // video when a new user joins an empty-but-not-yet-GC'd room slot.
-    if (data.roomMode === 'youtube' && peerPresent) {
+    if (data.roomMode === 'youtube' && otherPeer) {
       setRoomModeUI('youtube', false);
       if (data.youtubeVideoId) {
         const ytInput = document.getElementById('yt-url-input');
@@ -1130,62 +1878,75 @@ function wireClientEvents() {
         processYtUrl(data.youtubeVideoId).catch(console.warn);
       }
     }
+    flushQueuedMediaSync();
+  });
+
+  client.on('rejoined', () => {
+    if (appState.presenceState === 'online') hideReconnectingUI('Connected again');
+    flushQueuedMediaSync();
+    maybeResumeCall({ reason: 'self-rejoined', delayMs: RESUME_AFTER_RECOVERY_DELAY_MS });
   });
 
   client.on('peer_joined', (data) => {
-    peerPresent = true;
-
-    // BUG FIX: if peer_left fired but the peer reconnected within the grace
-    // window, cancel the pending call teardown. This prevents the WS reconnect
-    // cycle (leave → rejoin within seconds) from destroying and rebuilding
-    // the entire WebRTC call every time.
-    if (peerLeftTimer) {
-      clearTimeout(peerLeftTimer);
-      peerLeftTimer = null;
-      // Peer is back — show reconnected toast instead of "joined" toast
-      showToast(`${data.name} reconnected 🔄`);
-      addPeerToUI(data);
-      // If the call was healthy and survived, just return; otherwise rebuild
-      if (call) return;
-    } else {
-      showToast(`${data.name} joined the room 🎉`);
-      addPeerToUI(data);
-    }
-
-    ensureVideoCall();
+    clearPresenceOfflineTimer();
+    setPresenceState('online');
+    addPeerToUI(data);
+    updatePeerReadyState(data.peerId, false);
+    hideReconnectingUI(`${data.name} joined the room`);
+    showToast(`${data.name} joined the room 🎉`);
   });
 
+  client.on('peer_reconnecting', ({ name }) => {
+    handleReconnect({ name });
+  });
+
+  client.on('peer_reconnected', (data) => {
+    addPeerToUI(data);
+    queueMediaSync('peer-reconnected');
+    flushQueuedMediaSync();
+    handleRecovery({
+      message: 'Connected again',
+      requestResume: true,
+      delayMs: RESUME_AFTER_RECOVERY_DELAY_MS,
+    });
+  });
+
+  client.on('peer_name_updated', ({ participantId, name }) => {
+    handleNameUpdate({
+      participantId: participantId || remotePeerState.participantId,
+      name: name || remotePeerState.name,
+    });
+  });
+
+  client.on('camera_toggle', (payload) => handleMediaSync(payload));
+  client.on('mic_toggle', (payload) => handleMediaSync(payload));
+  client.on('sync_media_state', (payload) => handleMediaSync(payload));
+
   client.on('peer_left', (data) => {
-    peerPresent = false;
+    clearPresenceOfflineTimer();
+    resetIceRecoveryState();
+    setPresenceState('offline');
     removePeerFromUI(data.peerId);
+    updatePeerReadyState(data.peerId, false);
     clearSyncPlaybackRate();
+    readyBtn?.classList.remove('peer-wants-you');
 
-    // Pause playback immediately — but keep the call alive for now
-    if (roomMode === 'youtube') { if (ytPlayer && ytPlayerReady) { ytPlayer.pauseVideo(); ytIsPaused = true; } }
-    else movieVideo.pause();
+    if (roomMode === 'youtube') {
+      if (ytPlayer && ytPlayerReady) {
+        ytPlayer.pauseVideo();
+        ytIsPaused = true;
+      }
+    } else {
+      movieVideo.pause();
+    }
 
-    // BUG FIX: don't tear down the WebRTC call immediately on peer_left.
-    // WebSocket drops are common on mobile / poor networks. The peer usually
-    // reconnects within 1-3 seconds via client.js auto-reconnect. If we
-    // destroy the call instantly, we pay the full ICE negotiation cost again
-    // every time — which is exactly what caused the endless leave/rejoin loop.
-    //
-    // Strategy: show a "reconnecting" toast and wait PEER_LEFT_GRACE_MS.
-    // If peer_joined fires within that window, we cancel the teardown.
-    // If the timer expires without them coming back, we accept they're gone.
-    clearTimeout(peerLeftTimer);
-    showToast(`${data.name} disconnected — waiting for reconnect…`);
-    setSyncStatus(`${data.name || 'Your friend'} disconnected — reconnecting…`, 'warn');
-
-    peerLeftTimer = setTimeout(() => {
-      peerLeftTimer = null;
-      // They didn't come back — do the full teardown now
-      showToast(`${data.name} left the room`);
-      call?.end();
-      call = null;
-      callStarting = false;
-      setSyncStatus('Waiting for your friend to join', 'idle');
-    }, PEER_LEFT_GRACE_MS);
+    const leftMessage = data.reason === 'reconnect_timeout'
+      ? `${data.name || 'Your friend'} could not reconnect`
+      : `${data.name || 'Your friend'} left the room`;
+    endCallForOffline({
+      toastMessage: leftMessage,
+      toastVariant: data.reason === 'reconnect_timeout' ? 'warn' : 'info',
+    });
   });
 
   // ── File loading ─────────────────────────────────────────────────────────
@@ -1243,6 +2004,12 @@ function wireClientEvents() {
     const elapsedSec = serverTs ? Math.max(0, (Date.now() - serverTs) / 1000) : 0;
     const startFrom  = Math.max(1, 3 - elapsedSec);
 
+    try {
+      await ensureVideoCall({ force: true });
+    } catch (err) {
+      console.warn('video call start failed during countdown:', err?.message || err);
+    }
+
     // Seek to start position. For YouTube we must wait for the player to be
     // ready before calling seekTo — if the receiver's background init is still
     // in-flight, awaiting the mutex promise here ensures we don't call methods
@@ -1296,6 +2063,11 @@ function wireClientEvents() {
         : `${name || getPeerDisplayName()} went back to pick a different file.`,
     });
     showToast(`${name || getPeerDisplayName()} went back to ${roomMode === 'youtube' ? 'change video' : 'file selection'}`, 'info');
+  });
+
+  client.on('call_resume_needed', () => {
+    if (!call || !isHost) return;
+    maybeResumeCall({ reason: 'peer-requested-resume' });
   });
 
   // ── YouTube room-level events ──────────────────────────────────────────
@@ -1658,7 +2430,7 @@ function wireVideoControls() {
     const isEchoFromSync = lastAppliedSyncState &&
       lastAppliedSyncState.playing === false &&
       (Date.now() - lastAppliedSyncState.at) < SYNC_ECHO_SUPPRESS_MS;
-    if (isWatchScreenActive() && peerPresent && !isAtVideoEnd() && !isEchoFromSync) {
+    if (isWatchScreenActive() && canSendRoomControls() && !isAtVideoEnd() && !isEchoFromSync) {
       sendPlayPauseCommand(false, movieVideo.currentTime);
     }
   });
@@ -1667,7 +2439,7 @@ function wireVideoControls() {
     const isEchoFromSync = lastAppliedSyncState &&
       lastAppliedSyncState.playing === true &&
       (Date.now() - lastAppliedSyncState.at) < SYNC_ECHO_SUPPRESS_MS;
-    if (isWatchScreenActive() && peerPresent && !isEchoFromSync) {
+    if (isWatchScreenActive() && canSendRoomControls() && !isEchoFromSync) {
       sendPlayPauseCommand(true, movieVideo.currentTime);
     }
   });
@@ -1700,40 +2472,62 @@ function wireVideoControls() {
 
 async function startVideoCall() {
   if (call) return call;
+  resetIceRecoveryState();
+  callHasEverConnected = false;
+  callConnectionAnnounced = false;
+  lastIceConnectionState = 'new';
+  lastResumeRequestAt = 0;
+  setCallState('connecting');
   call = new VideoCall(client, localVideo, remoteVideo);
   window.activeCall = call;
-
-  const remoteCamOff = document.getElementById('remote-cam-off');
 
   call
     .on('started', ({ hasVideo, hasAudio }) => {
       console.log('Call started — video:', hasVideo, 'audio:', hasAudio);
+      setCallState('connecting');
+      localMediaState.isCameraOn = !!hasVideo;
+      localMediaState.isMicOn = !!hasAudio;
+      remoteVideoTrackHidden = false;
       showCallUI(true);
+      broadcastLocalMediaState('camera_toggle');
     })
     .on('remote_stream', () => {
       showCallUI(true);
-      if (remoteCamOff) remoteCamOff.style.display = 'none';
+      remoteVideoTrackHidden = false;
+      renderRemoteMediaUI();
     })
     .on('remote_camera_off', () => {
-      if (remoteCamOff) remoteCamOff.style.display = 'flex';
+      remoteVideoTrackHidden = true;
+      renderRemoteMediaUI();
     })
     .on('remote_camera_on', () => {
-      if (remoteCamOff) remoteCamOff.style.display = 'none';
+      remoteVideoTrackHidden = false;
+      renderRemoteMediaUI();
     })
     .on('remote_play_blocked', () => {
       showToast('Tap once if your friend’s video does not appear', 'info');
     })
     .on('connected', () => {
-      showToast('Video call connected 📹');
+      handleCallIceState(call?.iceState || 'connected');
+      if (!callConnectionAnnounced) {
+        callConnectionAnnounced = true;
+        showToast('Video call connected 📹');
+      }
     })
-    .on('peer_disconnected', () => {
-      showToast('Call disconnected — reconnecting…');
+    .on('ice_state', ({ state }) => {
+      handleCallIceState(state);
     })
     .on('camera_unavailable', () => {
+      localMediaState.isCameraOn = false;
+      renderRemoteMediaUI();
+      broadcastLocalMediaState('camera_toggle');
       showToast('Camera not available — audio only');
     })
     .on('ice_failed', () => {
-      showToast('Video call could not connect — network may be blocking P2P. Try a different network.', 'warn');
+      endCallForOffline({
+        toastMessage: 'Video call could not reconnect — network may be blocking P2P. Try again.',
+        statusMessage: 'Call ended — waiting for your friend',
+      });
     })
     .on('quality_changed', ({ tier }) => {
       const toastMessages = {
@@ -1767,10 +2561,16 @@ async function startVideoCall() {
       console.log('[Call] Quality tier:', tier);
     })
     .on('ended', () => {
-      if (remoteCamOff) remoteCamOff.style.display = 'none';
+      resetIceRecoveryState();
+      remoteVideoTrackHidden = false;
       showCallUI(false);
       window.activeCall = null;
+      if (appState.callState !== 'idle') setCallState('ended');
       call = null;
+      callHasEverConnected = false;
+      callConnectionAnnounced = false;
+      lastIceConnectionState = 'new';
+      lastResumeRequestAt = 0;
       // Reset quality badge
       const badge = document.getElementById('pip-quality-badge');
       if (badge) badge.style.display = 'none';
@@ -1778,7 +2578,8 @@ async function startVideoCall() {
       if (pipBubble) delete pipBubble.dataset.quality;
     });
 
-  // Host is the WebRTC offer initiator; guest auto-answers via 'peer_joined' signal
+  // Host is the WebRTC offer initiator. The call is created intentionally from
+  // the countdown / resume flow, not from room presence events.
   await call.start(isHost);
   return call;
 }
@@ -1792,6 +2593,8 @@ function retryPendingPlayback() {
 muteBtn?.addEventListener('click', () => {
   if (!call) return;
   call.toggleMute();
+  syncLocalMediaStateFromCall();
+  broadcastLocalMediaState('mic_toggle');
   // Sync all button state from single source of truth (call.isMuted)
   syncCallButtonState();
 });
@@ -1800,6 +2603,8 @@ muteBtn?.addEventListener('click', () => {
 cameraBtn?.addEventListener('click', () => {
   if (!call) return;
   call.toggleCamera();
+  syncLocalMediaStateFromCall();
+  broadcastLocalMediaState('camera_toggle');
   // Opacity is now managed inside webrtc.js (_releaseCamera/_resumeCamera)
   // to avoid a race between the async toggle and this sync read.
   // We just update the button icon state here.
@@ -1808,8 +2613,14 @@ cameraBtn?.addEventListener('click', () => {
 
 // ── End call ─────────────────────────────────────────────────────────────────
 endCallBtn?.addEventListener('click', () => {
+  resetIceRecoveryState();
   call?.end();
   call = null;
+  callHasEverConnected = false;
+  callConnectionAnnounced = false;
+  lastIceConnectionState = 'new';
+  lastResumeRequestAt = 0;
+  setCallState('ended');
 });
 
 watchBackBtn?.addEventListener('click', () => {
@@ -1867,9 +2678,7 @@ function spawnFloatingReaction(emoji) {
 
 function showLobby(code) {
   clearLandingNotice();
-  document.getElementById('screen-landing')?.classList.remove('active');
-  document.getElementById('screen-watch')?.classList.remove('active');
-  document.getElementById('screen-lobby')?.classList.add('active');
+  setActiveScreen('lobby');
   const codeEl = document.getElementById('lobby-room-code');
   if (codeEl) codeEl.textContent = code;
   const roomPath = `/${code}`;
@@ -1877,19 +2686,13 @@ function showLobby(code) {
     window.history.replaceState({}, '', roomPath);
   }
   window.setRoomCode(code);  // Update share link in HTML
-  const playerCard = document.querySelector('.player-card.you');
-  if (playerCard) {
-    const pTag = playerCard.querySelector('.ptag.pmyself');
-    if (pTag) {
-        pTag.textContent = 'You • ' + myName;
-    }
-}
+  renderLocalProfileUI();
 }
 
 function showCallUI(visible) {
-  document.getElementById('call-controls')?.style.setProperty('display', visible ? 'flex' : 'none');
   const pipBubble = document.getElementById('pip-bubble');
   pipBubble?.style.setProperty('display', visible ? 'block' : 'none');
+  if (pipCallControls) pipCallControls.hidden = !visible;
   if (visible) {
     if (pipBubble) {
       pipBubble.style.left = '';
@@ -1902,7 +2705,9 @@ function showCallUI(visible) {
     // icon to snap back to 'mic' every time the user switched screens (lobby ->
     // watch) or tab-switched back, even though the mic was still muted.
     // Fix: read the real state from the call object and reflect it accurately.
+    syncLocalMediaStateFromCall();
     syncCallButtonState();
+    renderRemoteMediaUI({ immediateCamera: true });
 
     // Only reset opacity to 1 if camera is actually on.
     // If it's off, webrtc.js already set opacity to 0 — don't override it.
@@ -1940,9 +2745,7 @@ function syncCallButtonState() {
 }
 
 function showWatchScreen() {
-  document.getElementById('screen-landing')?.classList.remove('active');
-  document.getElementById('screen-lobby')?.classList.remove('active');
-  document.getElementById('screen-watch')?.classList.add('active');
+  setActiveScreen('watch');
 }
 
 function updatePeerList(peers) {
@@ -1954,9 +2757,13 @@ function updatePeerList(peers) {
 function addPeerToUI(peer) {
   const el = document.getElementById('friend-card');
   if (!el) return;
-  el.querySelector('.pname').textContent = peer.name;
-  el.querySelector('.pav').textContent   = peer.name.slice(0, 2).toUpperCase();
-  el.querySelector('.pfriend').textContent = 'Friend • ' + peer.name;
+  el.querySelector('.pname')?.classList.remove('pname-wait');
+  updateRemotePeerState({
+    participantId: peer.participantId || peer.peerId,
+    name: peer.name || 'Your friend',
+    isCameraOn: peer.isCameraOn !== false,
+    isMicOn: peer.isMicOn !== false,
+  });
   const fileLabelEl = document.getElementById('friend-file-label');
   const friendIconEl = document.querySelector('#friend-card .file-drop .fd-icon');
   if (fileLabelEl) fileLabelEl.innerHTML = 'Waiting for<br>your friend to choose a file';
@@ -1966,9 +2773,8 @@ function addPeerToUI(peer) {
 function removePeerFromUI(peerId) {
   const el = document.getElementById('friend-card');
   if (!el) return;
-  el.querySelector('.pname').textContent = 'Waiting…';
-  el.querySelector('.pav').textContent   = '?';
-  el.querySelector('.pfriend').textContent = 'Friend';
+  el.querySelector('.pname')?.classList.add('pname-wait');
+  resetRemotePeerState();
   const fileLabelEl = document.getElementById('friend-file-label');
   const friendIconEl = document.querySelector('#friend-card .file-drop .fd-icon');
   if (fileLabelEl) fileLabelEl.innerHTML = 'Waiting for<br>your friend to join';
@@ -2033,6 +2839,8 @@ function startCountdown(onDone, startFrom = 3) {
 
   const el = document.getElementById('countdown-number');
   const overlay = document.getElementById('countdown-overlay');
+  renderLocalProfileUI();
+  renderRemoteProfileUI({ immediateCamera: true });
   overlay?.classList.add('show');
 
   // If we're catching up (received countdown_start late due to network latency),
@@ -2098,12 +2906,16 @@ document.head.appendChild(style);
 // ═════════════════════════════════════════════════════════════════════════════
 
 // Expose global helpers used by the inline script in index.html
-window.handleSkip = (deltaSec) => {
+function handleSeekThrottle(deltaSec) {
+  if ((Date.now() - lastSeekAt) < CONTROL_DEDUPE_WINDOW_MS) return;
+  lastSeekAt = Date.now();
   const cur = roomMode === 'youtube' ? ytCurrentTime : movieVideo.currentTime;
   const dur = roomMode === 'youtube' ? ytDuration    : (movieVideo.duration || Infinity);
   const next = Math.max(0, Math.min(isFinite(dur) ? dur : 1e9, cur + deltaSec));
   applyExplicitSeek(next);
-};
+}
+
+window.handleSkip = handleSeekThrottle;
 
 window.handleVolumeChange = (v) => {
   if (roomMode === 'youtube') ytPlayer?.setVolume(Math.round(v * 100));
@@ -2252,7 +3064,7 @@ function onYtStateChange(state) {
   const isEchoFromSync = lastAppliedSyncState &&
     lastAppliedSyncState.playing === appliedPlaying &&
     (Date.now() - lastAppliedSyncState.at) < SYNC_ECHO_SUPPRESS_MS;
-  if (!isWatchScreenActive() || !peerPresent || isEchoFromSync) return;
+  if (!isWatchScreenActive() || !canSendRoomControls() || isEchoFromSync) return;
   if (state === 1) {
     sendPlayPauseCommand(true, ytCurrentTime);
   } else if (state === 2) {

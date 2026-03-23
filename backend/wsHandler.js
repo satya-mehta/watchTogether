@@ -25,7 +25,7 @@ const ROOM_SEEK_COOLDOWN_MS = 3000;
 
 // ── Send helper ───────────────────────────────────────────────────────────
 function send(ws, type, payload = {}) {
-  if (ws.readyState === ws.OPEN) {
+  if (ws && ws.readyState === ws.OPEN) {
     ws.send(JSON.stringify({ type, ...payload }));
   }
 }
@@ -38,16 +38,20 @@ function broadcast(room, type, payload = {}, excludePeerId = null) {
 }
 
 // ── Build a room snapshot for a newly joined peer ─────────────────────────
-function roomSnapshot(room, forPeerId) {
+function roomSnapshot(room, forPeerId, { rejoined = false } = {}) {
   const peers = [];
   room.peers.forEach(p => {
     peers.push({
       peerId:       p.peerId,
+      participantId: p.participantId,
       name:         p.name,
       isHost:       p.isHost,
       fileDuration: p.fileDuration,
       fileName:     p.fileName || null,
       isReady:      p.isReady,
+      isCameraOn:   p.isCameraOn !== false,
+      isMicOn:      p.isMicOn !== false,
+      connectionState: p.connectionState || 'online',
     });
   });
   return {
@@ -59,13 +63,51 @@ function roomSnapshot(room, forPeerId) {
     roomMode:      room.youtubeVideoId ? 'youtube' : 'local',
     youtubeVideoId: room.youtubeVideoId || null,
     youtubeTitle:  room.youtubeTitle   || null,
+    rejoined,
   };
+}
+
+function finalizePeerDeparture(roomManager, room, participantId, { reason = 'left' } = {}) {
+  const peer = roomManager.getPeer(room, participantId);
+  if (!peer) return null;
+
+  roomManager.removePeer(room, participantId);
+
+  broadcast(room, 'peer_left', {
+    peerId: participantId,
+    name: peer.name,
+    reason,
+  });
+
+  // A real leave ends shared playback. Temporary reconnects do not call this.
+  if (room.peers.size > 0) {
+    const serverPos = roomManager.currentPosition(room);
+    room.playState.playing = false;
+    room.playState.positionSec = serverPos;
+    room.playState.lastUpdatedAt = Date.now();
+    broadcast(room, 'play_pause', {
+      playing: false,
+      positionSec: serverPos,
+      reason: 'peer_left',
+      serverTs: Date.now(),
+    });
+  } else {
+    room.youtubeVideoId = null;
+    room.youtubeTitle = null;
+    room.playState.playing = false;
+    room.playState.positionSec = 0;
+    room.playState.masterId = null;
+    room.playState.lastUpdatedAt = Date.now();
+  }
+
+  return peer;
 }
 
 // ── Main connection handler ───────────────────────────────────────────────
 function handleConnection(ws, req, roomManager) {
   let myRoom   = null;
   let myPeerId = null;
+  let didExplicitLeave = false;
 
   // BUG FIX: track last play_pause by content (playing+position) not just time.
   // This prevents the echo storm where both peers keep re-sending the same
@@ -94,39 +136,79 @@ function handleConnection(ws, req, roomManager) {
       const room = roomManager.findByCode(msg.roomCode?.toUpperCase());
       if (!room) return send(ws, 'error', { message: 'Room not found' });
 
-      // Evict any dead peer slots before checking capacity.
-      // When a peer's WS drops (Render free-tier, mobile network) and they
-      // reconnect within the 10-min room TTL, their old slot is still in the
-      // Map with a closed/dead socket. Without this, the room always appears
-      // full to the reconnecting peer, causing the "Room full" error.
-      room.peers.forEach((peer, peerId) => {
-        const state = peer.ws.readyState;
-        // readyState 2 = CLOSING, 3 = CLOSED
-        if (state === 2 || state === 3) {
-          console.log(`[Room] ${room.code} evicting dead peer ${peer.name} (ws=${state})`);
-          roomManager.removePeer(room, peerId);
-        }
-      });
+      const participantId = String(msg.participantId || uuidv4());
+      const existingPeer = roomManager.getPeer(room, participantId);
+      if (!existingPeer && room.peers.size >= 2) {
+        return send(ws, 'error', { message: 'Room full' });
+      }
 
-      if (room.peers.size >= 2) return send(ws, 'error', { message: 'Room full' });
-
-      myPeerId = uuidv4();
+      myPeerId = participantId;
       myRoom   = room;
-      roomManager.addPeer(room, ws, myPeerId, msg.name || 'Guest', !!msg.isHost);
+      didExplicitLeave = false;
 
-      send(ws, 'joined', roomSnapshot(room, myPeerId));
-
-      broadcast(room, 'peer_joined', {
-        peerId: myPeerId,
-        name:   msg.name || 'Guest',
-        isHost: !!msg.isHost,
-      }, myPeerId);
-
-      console.log(`[WS] ${msg.name} joined ${room.code}`);
+      if (existingPeer) {
+        const oldWs = existingPeer.ws;
+        const priorState = existingPeer.connectionState;
+        roomManager.reconnectPeer(room, participantId, ws, {
+          name: msg.name || existingPeer.name || 'Guest',
+          isHost: existingPeer.isHost || !!msg.isHost,
+        });
+        send(ws, 'joined', roomSnapshot(room, myPeerId, { rejoined: true }));
+        if (oldWs && oldWs !== ws) {
+          try { oldWs.close(4000, 'session-replaced'); } catch {}
+        }
+        if (priorState === 'reconnecting' || (oldWs && oldWs !== ws)) {
+          broadcast(room, 'peer_reconnected', {
+            peerId: myPeerId,
+            participantId: myPeerId,
+            name: msg.name || existingPeer.name || 'Guest',
+            isHost: existingPeer.isHost || !!msg.isHost,
+            isCameraOn: existingPeer.isCameraOn !== false,
+            isMicOn: existingPeer.isMicOn !== false,
+          }, myPeerId);
+        }
+        console.log(`[WS] ${msg.name || existingPeer.name || 'Guest'} rejoined ${room.code}`);
+      } else {
+        roomManager.addPeer(room, ws, myPeerId, msg.name || 'Guest', !!msg.isHost);
+        send(ws, 'joined', roomSnapshot(room, myPeerId));
+        broadcast(room, 'peer_joined', {
+          peerId: myPeerId,
+          participantId: myPeerId,
+          name:   msg.name || 'Guest',
+          isHost: !!msg.isHost,
+          isCameraOn: true,
+          isMicOn: true,
+        }, myPeerId);
+        console.log(`[WS] ${msg.name} joined ${room.code}`);
+      }
       return;
     }
 
     if (!myRoom || !myPeerId) return send(ws, 'error', { message: 'Not in a room' });
+
+    if (type === 'leave_room') {
+      const peer = roomManager.getPeer(myRoom, myPeerId);
+      didExplicitLeave = true;
+      finalizePeerDeparture(roomManager, myRoom, myPeerId, { reason: 'explicit_leave' });
+      console.log(`[WS] ${peer?.name || myPeerId} left ${myRoom.code}`);
+      myRoom = null;
+      myPeerId = null;
+      return;
+    }
+
+    if (type === 'update_name') {
+      const peer = myRoom.peers.get(myPeerId);
+      if (!peer) return;
+      const nextName = String(msg.name || '').replace(/\s+/g, ' ').trim().slice(0, 32) || peer.name || 'Guest';
+      peer.name = nextName;
+      broadcast(myRoom, 'peer_name_updated', {
+        peerId: myPeerId,
+        participantId: myPeerId,
+        name: nextName,
+      }, myPeerId);
+      console.log(`[Room] ${myRoom.code} rename ${myPeerId.slice(0, 8)} -> ${nextName}`);
+      return;
+    }
 
     // ── FILE_READY ────────────────────────────────────────────────────────
     if (type === 'file_ready') {
@@ -348,6 +430,7 @@ function handleConnection(ws, req, roomManager) {
       const payload = {
         messageId:   msg.messageId || uuidv4(), // dedup key the client can use
         fromPeerId:  myPeerId,
+        participantId: myPeerId,
         senderName:  peer?.name || 'Guest',
         text:        safeText,
         timestamp:   Date.now(),
@@ -426,6 +509,27 @@ function handleConnection(ws, req, roomManager) {
       return;
     }
 
+    if (type === 'call_resume_needed') {
+      broadcast(myRoom, 'call_resume_needed', {
+        peerId: myPeerId,
+      }, myPeerId);
+      return;
+    }
+
+    if (type === 'camera_toggle' || type === 'mic_toggle' || type === 'sync_media_state') {
+      const peer = myRoom.peers.get(myPeerId);
+      if (!peer) return;
+      if (typeof msg.isCameraOn === 'boolean') peer.isCameraOn = msg.isCameraOn;
+      if (typeof msg.isMicOn === 'boolean') peer.isMicOn = msg.isMicOn;
+      broadcast(myRoom, type, {
+        peerId: myPeerId,
+        participantId: myPeerId,
+        isCameraOn: peer.isCameraOn !== false,
+        isMicOn: peer.isMicOn !== false,
+      }, myPeerId);
+      return;
+    }
+
     // ── WebRTC signalling pass-through ────────────────────────────────────
     if (type === 'webrtc_signal') {
       broadcast(myRoom, 'webrtc_signal', {
@@ -446,35 +550,20 @@ function handleConnection(ws, req, roomManager) {
   ws.on('close', () => {
     try {
       if (!myRoom || !myPeerId) return;
-      const peer = myRoom.peers.get(myPeerId);
-      roomManager.removePeer(myRoom, myPeerId);
+      if (didExplicitLeave) return;
+      const peer = roomManager.getPeer(myRoom, myPeerId);
+      if (!peer || peer.ws !== ws) return;
 
-      broadcast(myRoom, 'peer_left', {
+      roomManager.markPeerReconnecting(myRoom, myPeerId);
+      broadcast(myRoom, 'peer_reconnecting', {
         peerId: myPeerId,
-        name:   peer?.name,
-      });
+        name: peer.name,
+        graceMs: myRoom.peerReconnectGraceMs || 0,
+      }, myPeerId);
 
-      // Pause playback for remaining peer since sync partner is gone
-      if (myRoom.peers.size > 0) {
-        const serverPos = roomManager.currentPosition(myRoom);
-        myRoom.playState.playing     = false;
-        myRoom.playState.positionSec = serverPos;
-        broadcast(myRoom, 'play_pause', {
-          playing:     false,
-          positionSec: serverPos,
-          reason:      'peer_left',
-          serverTs:    Date.now(),
-        });
-      } else {
-        // Room is now empty. Clear YouTube state immediately so any future
-        // joiner who lands in this slot (within the 10-min TTL window) does
-        // not see stale video state from a completely different session.
-        myRoom.youtubeVideoId = null;
-        myRoom.youtubeTitle   = null;
-        myRoom.playState.playing     = false;
-        myRoom.playState.positionSec = 0;
-        myRoom.playState.masterId    = null;
-      }
+      roomManager.scheduleReconnectExpiry(myRoom, myPeerId, () => {
+        finalizePeerDeparture(roomManager, myRoom, myPeerId, { reason: 'reconnect_timeout' });
+      });
     } catch (err) {
       console.error('[WS] Error during close handler:', err.message);
     }

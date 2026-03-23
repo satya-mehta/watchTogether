@@ -20,26 +20,25 @@ const server = http.createServer(app);
 // ── WebSocket server ───────────────────────────────────────────────────────
 const wss = new WebSocketServer({ server, path: '/ws' });
 wss.on('connection', (ws, req) => {
-  ws.isAlive = true;
+  ws.missedPongs = 0;
   ws.on('pong', () => {
-    ws.isAlive = true;
+    ws.missedPongs = 0;
   });
   handleConnection(ws, req, roomManager);
 });
 
-// BUG FIX: reduced from 5000ms to 2000ms.
-// At 5s, a dead socket can linger for up to 10s (missed ping + another full
-// interval before terminate fires). During that window, if the peer reconnects
-// and tries to rejoin, the room appears full. 2s heartbeat means stale sockets
-// are evicted within ~4s, well within the client's 2s rejoin delay.
-const HEARTBEAT_INTERVAL_MS = 2000;
+// Ping less aggressively and only terminate after repeated missed pongs.
+// A single missed mobile pong should not instantly eject the participant.
+const HEARTBEAT_INTERVAL_MS = 5000;
+const MAX_MISSED_PONGS = 2;
 const heartbeatTimer = setInterval(() => {
   wss.clients.forEach((ws) => {
-    if (ws.isAlive === false) {
+    if (ws.readyState !== ws.OPEN) return;
+    ws.missedPongs = (ws.missedPongs || 0) + 1;
+    if (ws.missedPongs > MAX_MISSED_PONGS) {
       ws.terminate();
       return;
     }
-    ws.isAlive = false;
     ws.ping();
   });
 }, HEARTBEAT_INTERVAL_MS);

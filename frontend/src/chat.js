@@ -48,11 +48,14 @@ export class Chat {
    * @param {WatchTogetherClient} opts.client   — the connected WS client
    * @param {string}          opts.myName        — local user's display name
    * @param {function}        opts.getPeerName   — () => string  — friend's display name
+   * @param {function}        opts.resolveParticipantName — (participantId, fallback) => string
    */
-  constructor({ client, myName, getPeerName }) {
-    this._client      = client;
-    this._myName      = myName;
-    this._getPeerName = getPeerName;
+  constructor({ client, myName, getPeerName, resolveParticipantName }) {
+    this._client                 = client;
+    this._myName                 = myName;
+    this._myParticipantId        = null;
+    this._getPeerName            = getPeerName;
+    this._resolveParticipantName = resolveParticipantName;
 
     // In-memory message log — survives panel toggle
     this._messages      = [];
@@ -87,12 +90,36 @@ export class Chat {
   /** Wire the WS client listener — call once per session (after client connects). */
   wireClient(client) {
     this._client = client;
+    this.setMyParticipantId(client?.participantId || null);
     this._client.on('chat_message', (data) => this._onIncoming(data));
   }
 
   /** Update the local user's name (called after name is known). */
   setMyName(name) {
     this._myName = name;
+  }
+
+  setMyParticipantId(participantId) {
+    this._myParticipantId = participantId ? String(participantId) : null;
+  }
+
+  syncParticipantName(participantId, nextName) {
+    const safeParticipantId = String(participantId || '').trim();
+    const safeName = sanitize(nextName);
+    if (!safeParticipantId || !safeName || safeParticipantId === this._myParticipantId) return;
+
+    this._messages = this._messages.map((message) => (
+      message.participantId === safeParticipantId
+        ? { ...message, senderName: safeName }
+        : message
+    ));
+
+    this._msgContainer?.querySelectorAll('.chat-msg').forEach((messageEl) => {
+      if (messageEl.dataset.participantId !== safeParticipantId) return;
+      const nameEl = messageEl.querySelector('.chat-msg-name');
+      if (!nameEl || messageEl.dataset.self === 'true') return;
+      nameEl.textContent = safeName;
+    });
   }
 
   /** Reset all chat state — call on room leave / home navigation. */
@@ -256,6 +283,7 @@ export class Chat {
     const raw  = this._input?.value ?? '';
     const text = sanitize(raw);
     if (!text) return;
+    const participantId = this._myParticipantId || this._client.participantId || '__self__';
 
     // Generate a local messageId so we can render optimistically and dedup later
     const messageId = this._client.sendChat(text);
@@ -264,7 +292,7 @@ export class Chat {
     // back to sender anyway, this is the canonical local render)
     this._appendMessage({
       messageId,
-      fromPeerId: '__self__',  // sentinel — means "this is my own message"
+      participantId,
       senderName: this._myName || 'You',
       text,
       timestamp: Date.now(),
@@ -282,11 +310,13 @@ export class Chat {
     // Dedup: the server may (theoretically) relay the same message twice on
     // reconnect edge cases. messageId is generated per-send so it's unique.
     if (this._seenIds.has(data.messageId)) return;
+    const participantId = String(data.participantId || data.fromPeerId || '').trim();
+    const resolvedName = this._resolveName(participantId, data.senderName);
 
     this._appendMessage({
       messageId:  data.messageId,
-      fromPeerId: data.fromPeerId,
-      senderName: sanitize(data.senderName),
+      participantId,
+      senderName: resolvedName,
       text:       sanitize(data.text),
       timestamp:  data.timestamp || Date.now(),
       isSelf:     false,
@@ -299,19 +329,19 @@ export class Chat {
       // Also show a subtle toast so user notices without opening chat
       // (only if count is low — don't spam the toast for every message)
       if (this._unread <= 3 && typeof window._showChatToast === 'function') {
-        window._showChatToast(`${sanitize(data.senderName)}: ${sanitize(data.text)}`);
+        window._showChatToast(`${resolvedName}: ${sanitize(data.text)}`);
       }
     }
   }
 
   // ── DOM append ────────────────────────────────────────────────────────────
 
-  _appendMessage({ messageId, senderName, text, timestamp, isSelf }) {
+  _appendMessage({ messageId, participantId, senderName, text, timestamp, isSelf }) {
     if (!this._msgContainer) return;
 
     // Track seen IDs
     this._seenIds.add(messageId);
-    this._messages.push({ messageId, senderName, text, timestamp, isSelf });
+    this._messages.push({ messageId, participantId, senderName, text, timestamp, isSelf });
 
     // Check scroll position BEFORE adding the new element
     const wasNearBottom = this._isNearBottom();
@@ -320,13 +350,15 @@ export class Chat {
     const el      = document.createElement('div');
     el.className  = `chat-msg ${isSelf ? 'chat-msg--self' : 'chat-msg--peer'}`;
     el.dataset.id = messageId;
+    el.dataset.participantId = participantId || '';
+    el.dataset.self = isSelf ? 'true' : 'false';
 
     const metaEl  = document.createElement('div');
     metaEl.className = 'chat-msg-meta';
 
     const nameEl  = document.createElement('span');
     nameEl.className = 'chat-msg-name';
-    nameEl.textContent = isSelf ? 'You' : senderName; // safe — textContent
+    nameEl.textContent = isSelf ? 'You' : this._resolveName(participantId, senderName);
 
     const timeEl  = document.createElement('span');
     timeEl.className = 'chat-msg-time';
@@ -386,5 +418,18 @@ export class Chat {
       this._unreadDot.classList.remove('visible');
       this._unreadDot.textContent = '';
     }
+  }
+
+  _resolveName(participantId, fallbackName = '') {
+    const safeParticipantId = String(participantId || '').trim();
+    if (safeParticipantId && safeParticipantId === this._myParticipantId) {
+      return sanitize(this._myName) || 'You';
+    }
+
+    const resolved = this._resolveParticipantName?.(
+      safeParticipantId,
+      fallbackName || this._getPeerName?.() || 'Guest'
+    );
+    return sanitize(resolved || fallbackName || this._getPeerName?.() || 'Guest') || 'Guest';
   }
 }
