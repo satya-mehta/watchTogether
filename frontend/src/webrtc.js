@@ -518,31 +518,15 @@ export class VideoCall extends EventTarget {
         // Start quality monitoring once we have a stable connection
         this._startQualityMonitor();
       } else if (state === 'failed') {
-        console.warn('[WebRTC] ICE failed — attempting restart');
+        clearTimeout(this._disconnectTimer);
+        this._disconnectTimer = null;
+        console.warn('[WebRTC] ICE failed — waiting for app-level recovery');
         this._stopQualityMonitor();
-        this._iceRestart();
       } else if (state === 'disconnected') {
         this._emit('peer_disconnected');
         this._stopQualityMonitor();
-        // FIX: use a much longer delay (7s) before restarting.
-        // 'disconnected' is a transient state on mobile / weak WiFi —
-        // the browser's own ICE keep-alives usually recover it within
-        // 1-4 seconds without any intervention. The old 2500ms timer was
-        // firing during self-recoveries, aborting them and creating the
-        // endless disconnect→restart→peer_left→peer_joined cycle in the logs.
-        if (!this._disconnectTimer) {
-          this._disconnectTimer = setTimeout(() => {
-            this._disconnectTimer = null;
-            // Re-check state — might have self-recovered during the wait
-            if (this.pc?.iceConnectionState === 'disconnected' ||
-                this.pc?.iceConnectionState === 'failed') {
-              console.warn('[WebRTC] ICE still disconnected after grace period — restarting');
-              this._iceRestart();
-            } else {
-              console.log('[WebRTC] ICE self-recovered during grace period — no restart needed');
-            }
-          }, ICE_DISCONNECT_RESTART_DELAY_MS);
-        }
+        clearTimeout(this._disconnectTimer);
+        this._disconnectTimer = null;
       } else if (state === 'checking') {
         this._armRemoteStreamWatchdog();
       }
@@ -954,8 +938,7 @@ export class VideoCall extends EventTarget {
       this._remoteStreamTimer = null;
       const hasRemoteTracks = (this.remoteEl?.srcObject?.getTracks?.().length ?? 0) > 0;
       if (!hasRemoteTracks) {
-        console.warn('[WebRTC] Remote stream missing after timeout — retrying negotiation');
-        this._iceRestart();
+        console.warn('[WebRTC] Remote stream missing after timeout — waiting for app-level recovery');
       }
     }, 15000);
   }

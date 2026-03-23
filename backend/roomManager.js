@@ -38,7 +38,19 @@ function generateCode() {
 // This window lets both peers reconnect after a WS drop without losing
 // their room code.
 const EMPTY_ROOM_TTL_MS = 10 * 60 * 1000;
-const PEER_RECONNECT_GRACE_MS = 8000;
+const PEER_RECONNECT_GRACE_MS = 10000;
+const MIN_PEER_RECONNECT_GRACE_MS = 10000;
+const MAX_PEER_RECONNECT_GRACE_MS = 15000;
+
+function getPeerReconnectGraceMs(room) {
+  const rawGraceMs = Number(room?.peerReconnectGraceMs);
+  const normalizedGraceMs = Number.isFinite(rawGraceMs)
+    ? Math.min(MAX_PEER_RECONNECT_GRACE_MS, Math.max(MIN_PEER_RECONNECT_GRACE_MS, rawGraceMs))
+    : PEER_RECONNECT_GRACE_MS;
+
+  if (room) room.peerReconnectGraceMs = normalizedGraceMs;
+  return normalizedGraceMs;
+}
 
 class RoomManager {
   constructor() {
@@ -64,7 +76,7 @@ class RoomManager {
         lastUpdatedAt: Date.now(),
         masterId: null,
       },
-      peerReconnectGraceMs: PEER_RECONNECT_GRACE_MS,
+      peerReconnectGraceMs: getPeerReconnectGraceMs(),
     };
     this.rooms.set(id, room);
     this.codeIndex.set(code, id);
@@ -141,13 +153,20 @@ class RoomManager {
     // Always clear the previous reconnect grace timer before arming a new one.
     // This prevents stacked expiries during fast disconnect/reconnect cycles.
     this.clearReconnectTimer(peer);
-    peer.reconnectTimer = setTimeout(() => {
-      peer.reconnectTimer = null;
+    const graceMs = getPeerReconnectGraceMs(room);
+    const expire = typeof onExpire === 'function'
+      ? onExpire
+      : () => this.removePeer(room, participantId);
+    const timer = setTimeout(() => {
       const currentPeer = room.peers.get(participantId);
-      if (!currentPeer || currentPeer.connectionState !== 'reconnecting') return;
-      onExpire(currentPeer);
-    }, room.peerReconnectGraceMs || PEER_RECONNECT_GRACE_MS);
-    return peer.reconnectTimer;
+      if (!currentPeer) return;
+      if (currentPeer.reconnectTimer !== timer) return;
+      currentPeer.reconnectTimer = null;
+      if (currentPeer.connectionState !== 'reconnecting') return;
+      expire(currentPeer);
+    }, graceMs);
+    peer.reconnectTimer = timer;
+    return timer;
   }
 
   clearReconnectTimer(peer) {
@@ -158,6 +177,19 @@ class RoomManager {
 
   removePeer(room, peerId) {
     const peer = room.peers.get(peerId);
+    if (!peer) return null;
+
+    const graceMs = getPeerReconnectGraceMs(room);
+    const graceWindowStillActive =
+      peer.connectionState === 'reconnecting' &&
+      typeof peer.disconnectedAt === 'number' &&
+      (Date.now() - peer.disconnectedAt) < graceMs;
+
+    if (graceWindowStillActive) {
+      console.warn(`[Room] ${room.code}  skip remove ${peer.name} (${peerId}) while reconnect grace is active`);
+      return null;
+    }
+
     this.clearReconnectTimer(peer);
     room.peers.delete(peerId);
     console.log(`[Room] ${room.code}  -peer ${peer?.name}  remaining=${room.peers.size}`);
@@ -176,6 +208,8 @@ class RoomManager {
       room.emptyAt = Date.now();
       console.log(`[Room] ${room.code}  empty — will expire in ${EMPTY_ROOM_TTL_MS / 60000} min`);
     }
+
+    return peer;
   }
 
   // ── Current position ─────────────────────────────────────────────────────

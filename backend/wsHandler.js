@@ -22,6 +22,9 @@ const PLAY_PAUSE_DEDUP_MS = 80;
 // covers one direction. A room-level seek cooldown blocks ALL nudges for
 // all peers for 3s after any seek, giving both sides time to land.
 const ROOM_SEEK_COOLDOWN_MS = 3000;
+const DEFAULT_PEER_RECONNECT_GRACE_MS = 10000;
+const MIN_PEER_RECONNECT_GRACE_MS = 10000;
+const MAX_PEER_RECONNECT_GRACE_MS = 15000;
 
 // ── Send helper ───────────────────────────────────────────────────────────
 function send(ws, type, payload = {}) {
@@ -35,6 +38,16 @@ function broadcast(room, type, payload = {}, excludePeerId = null) {
   room.peers.forEach(({ ws, peerId }) => {
     if (peerId !== excludePeerId) send(ws, type, payload);
   });
+}
+
+function getPeerReconnectGraceMs(room) {
+  const rawGraceMs = Number(room?.peerReconnectGraceMs);
+  const normalizedGraceMs = Number.isFinite(rawGraceMs)
+    ? Math.min(MAX_PEER_RECONNECT_GRACE_MS, Math.max(MIN_PEER_RECONNECT_GRACE_MS, rawGraceMs))
+    : DEFAULT_PEER_RECONNECT_GRACE_MS;
+
+  if (room) room.peerReconnectGraceMs = normalizedGraceMs;
+  return normalizedGraceMs;
 }
 
 // ── Build a room snapshot for a newly joined peer ─────────────────────────
@@ -75,6 +88,7 @@ function finalizePeerDeparture(roomManager, room, participantId, { reason = 'lef
 
   broadcast(room, 'peer_left', {
     peerId: participantId,
+    participantId,
     name: peer.name,
     reason,
   });
@@ -135,6 +149,7 @@ function handleConnection(ws, req, roomManager) {
     if (type === 'join') {
       const room = roomManager.findByCode(msg.roomCode?.toUpperCase());
       if (!room) return send(ws, 'error', { message: 'Room not found' });
+      getPeerReconnectGraceMs(room);
 
       const participantId = String(msg.participantId || uuidv4());
       const existingPeer = roomManager.getPeer(room, participantId);
@@ -149,22 +164,24 @@ function handleConnection(ws, req, roomManager) {
       if (existingPeer) {
         const oldWs = existingPeer.ws;
         const priorState = existingPeer.connectionState;
-        roomManager.reconnectPeer(room, participantId, ws, {
+        const isSocketReplacement = !!oldWs && oldWs !== ws;
+        const reconnectedPeer = roomManager.reconnectPeer(room, participantId, ws, {
           name: msg.name || existingPeer.name || 'Guest',
           isHost: existingPeer.isHost || !!msg.isHost,
         });
         send(ws, 'joined', roomSnapshot(room, myPeerId, { rejoined: true }));
-        if (oldWs && oldWs !== ws) {
+        if (isSocketReplacement) {
           try { oldWs.close(4000, 'session-replaced'); } catch {}
         }
-        if (priorState === 'reconnecting' || (oldWs && oldWs !== ws)) {
+        if (priorState === 'reconnecting' || isSocketReplacement) {
           broadcast(room, 'peer_reconnected', {
             peerId: myPeerId,
             participantId: myPeerId,
-            name: msg.name || existingPeer.name || 'Guest',
-            isHost: existingPeer.isHost || !!msg.isHost,
-            isCameraOn: existingPeer.isCameraOn !== false,
-            isMicOn: existingPeer.isMicOn !== false,
+            name: reconnectedPeer?.name || msg.name || existingPeer.name || 'Guest',
+            isHost: reconnectedPeer?.isHost || false,
+            isCameraOn: reconnectedPeer?.isCameraOn !== false,
+            isMicOn: reconnectedPeer?.isMicOn !== false,
+            connectionState: 'online',
           }, myPeerId);
         }
         console.log(`[WS] ${msg.name || existingPeer.name || 'Guest'} rejoined ${room.code}`);
@@ -509,13 +526,6 @@ function handleConnection(ws, req, roomManager) {
       return;
     }
 
-    if (type === 'call_resume_needed') {
-      broadcast(myRoom, 'call_resume_needed', {
-        peerId: myPeerId,
-      }, myPeerId);
-      return;
-    }
-
     if (type === 'camera_toggle' || type === 'mic_toggle' || type === 'sync_media_state') {
       const peer = myRoom.peers.get(myPeerId);
       if (!peer) return;
@@ -532,10 +542,14 @@ function handleConnection(ws, req, roomManager) {
 
     // ── WebRTC signalling pass-through ────────────────────────────────────
     if (type === 'webrtc_signal') {
-      broadcast(myRoom, 'webrtc_signal', {
-        signal:     msg.signal,
-        fromPeerId: myPeerId,
-      }, myPeerId);
+      myRoom.peers.forEach(({ ws, peerId }) => {
+        if (peerId === myPeerId) return;
+        // Always relay signaling to any peer socket that currently exists.
+        send(ws, 'webrtc_signal', {
+          signal: msg.signal,
+          fromPeerId: myPeerId,
+        });
+      });
       return;
     }
 
@@ -553,16 +567,21 @@ function handleConnection(ws, req, roomManager) {
       if (didExplicitLeave) return;
       const peer = roomManager.getPeer(myRoom, myPeerId);
       if (!peer || peer.ws !== ws) return;
+      const room = myRoom;
+      const participantId = myPeerId;
+      const graceMs = getPeerReconnectGraceMs(room);
 
-      roomManager.markPeerReconnecting(myRoom, myPeerId);
-      broadcast(myRoom, 'peer_reconnecting', {
-        peerId: myPeerId,
+      roomManager.markPeerReconnecting(room, participantId);
+      broadcast(room, 'peer_reconnecting', {
+        peerId: participantId,
+        participantId,
         name: peer.name,
-        graceMs: myRoom.peerReconnectGraceMs || 0,
-      }, myPeerId);
+        graceMs,
+        connectionState: 'reconnecting',
+      }, participantId);
 
-      roomManager.scheduleReconnectExpiry(myRoom, myPeerId, () => {
-        finalizePeerDeparture(roomManager, myRoom, myPeerId, { reason: 'reconnect_timeout' });
+      roomManager.scheduleReconnectExpiry(room, participantId, () => {
+        finalizePeerDeparture(roomManager, room, participantId, { reason: 'reconnect_timeout' });
       });
     } catch (err) {
       console.error('[WS] Error during close handler:', err.message);

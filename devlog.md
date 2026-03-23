@@ -458,6 +458,121 @@ A daily record of bugs found, root causes, and fixes applied.
 
 ---
 
+### WebRTC call dropping on reconnect — root cause & full fix (March 23, 2026)
+
+**Root cause**
+A temporary socket drop was being treated as a real peer departure. The sequence was:
+1. `ws.on('close')` → `removePeer()` called immediately
+2. Backend emitted `peer_left` to the remaining peer
+3. Frontend tore down the WebRTC call on `peer_left`
+4. Disconnected peer reconnected and was treated as a brand new join → `peer_joined` fired
+5. Frontend tried to restart the call from scratch
+
+This created the visible pattern: call dropped → black screen → call ringing again → awkward restart — for what was just a 1–3 second network hiccup.
+
+A secondary problem: even when the backend held off on `peer_left`, the frontend was coupling call lifecycle too tightly to presence events. Any `peer_left` (even from an unrelated room event) could end the call, and `call_resume_needed` triggered a full renegotiation even when ICE had already self-recovered.
+
+**Backend fix — `wsHandler.js` & `roomManager.js`**
+
+*Do NOT remove peer on `ws.on('close')`:*
+- `ws.on('close')` now calls `roomManager.markPeerReconnecting()` instead of `removePeer()`.
+- Peer's `connectionState` is set to `'reconnecting'`, `ws` is set to `null`, `disconnectedAt` is stamped.
+- `peer_reconnecting` is broadcast to the remaining peer with the grace window duration.
+- `roomManager.scheduleReconnectExpiry()` arms an 8-second grace timer.
+
+*Grace timer — `roomManager.js`:*
+- `scheduleReconnectExpiry()` calls `clearReconnectTimer()` before arming to prevent stacked timers during fast disconnect/reconnect cycles.
+- If the peer does NOT reconnect within `PEER_RECONNECT_GRACE_MS` (8 s), `onExpire()` calls `finalizePeerDeparture()` which calls `removePeer()` and emits `peer_left` exactly once.
+- If the peer reconnects before timeout, `reconnectPeer()` clears the timer, restores `ws`, and resets `connectionState` to `'online'`.
+
+*On reconnect — `wsHandler.js` join handler:*
+- Incoming `join` with a `participantId` that exists in `room.peers` takes the reconnect path.
+- Old socket (if different) is closed with code 4000 `'session-replaced'`.
+- `peer_reconnected` is broadcast (NOT `peer_joined`) so the frontend knows not to restart the call.
+- `peer_joined` is only emitted for genuinely new participants.
+
+**Frontend fix — `webrtc.js`**
+
+*Do NOT destroy `peerConnection` on presence events:*
+- `peer_reconnecting` handler only updates UI state (e.g. shows a reconnecting indicator). It does not call `call.end()` or destroy `pc`.
+- `peer_reconnected` handler only updates UI state. It does not trigger renegotiation.
+- `peer_left` ends the call only when the peer is truly gone — i.e., it was emitted by the backend after the grace timeout, not as a result of a temporary drop.
+
+*ICE-based resume — `webrtc.js`:*
+- `call_resume_needed` no longer blindly triggers `createOffer()`. The handler checks two conditions before acting:
+  1. `callState === 'active'` — the call is actually running, not in setup or ended state.
+  2. `this.pc?.iceConnectionState` is NOT `'connected'` or `'completed'` — ICE has not already self-recovered.
+- `disconnected` ICE state is treated as a grace state. The 8.5-second `ICE_DISCONNECT_RESTART_DELAY_MS` timer re-checks state before restarting — if ICE self-recovered, the restart is skipped and a log line confirms it.
+- `isResuming` lock prevents stacked resume attempts from concurrent triggers (peer-side `call_resume_needed` + ICE `failed` arriving close together).
+- Resume remains initiator-owned (polite/impolite peer model) to avoid glare. A delayed fallback on the non-initiator side can request `call_resume_needed` if the initiator is slow, but the initiator's own ICE restart takes precedence.
+
+**Expected behaviour after fix**
+
+| Scenario | Before | After |
+|---|---|---|
+| Short drop (< 8 s) | call ended, restarted | call stays alive, no flicker |
+| Long drop (> 8 s) | call ended (fast) | call ends cleanly after grace |
+| ICE self-recovers | restart fires anyway, causes loop | restart timer cancels itself |
+| Reconnect after drop | `peer_joined` → renegotiate | `peer_reconnected` → no renegotiate |
+| Playback sync during drop | paused/desynced | unaffected (sync state is server-side) |
+
+**Files changed**
+- `backend/wsHandler.js` — `ws.on('close')` no longer calls `removePeer` directly; calls `markPeerReconnecting` + `scheduleReconnectExpiry`; join handler distinguishes new join vs reconnect.
+- `backend/roomManager.js` — Added `markPeerReconnecting()`, `reconnectPeer()`, `scheduleReconnectExpiry()`, `clearReconnectTimer()`. `PEER_RECONNECT_GRACE_MS = 8000`.
+- `frontend/src/webrtc.js` — ICE-based resume guard in `call_resume_needed` handler; `ICE_DISCONNECT_RESTART_DELAY_MS` increased to 8500 ms with post-timer state re-check; `isResuming` lock added.
+- `frontend/src/client.js` — `peer_reconnecting` and `peer_reconnected` cases added to `_handle()` switch and emitted as distinct events; `peer_left` handler in app code now checks `reason` before ending call.
+
+---
+
+## Day 9 — Frontend State Architecture (March 24, 2026)
+
+**Focus:** Implement a clean three-layer state system separating signaling, presence, and call lifecycle so reconnects no longer break the call.
+
+### Problem
+
+The call lifecycle was coupled directly to WebSocket presence events:
+- `peer_reconnecting` → `handleReconnect()` which internally called `handleRecovery()` which called `maybeResumeCall()` — the chain was opaque and the separation between "socket dropped" and "peer left" was not enforced at the handler level.
+- `peer_joined` had no guard against firing during an active call. If a `peer_joined` arrived mid-session (e.g. due to a race with the reconnect path), it would reset presence and ready state on a live call.
+- `setPresenceState('unstable')` was setting `peerPresent = false` because the check was `state === 'online'` only. This halted sync heartbeats and room controls during the reconnect grace window — exactly when you want them to keep running.
+
+### Fixes applied (`app.js`)
+
+**`setPresenceState` — `'unstable'` keeps `peerPresent = true`**
+- Before: `peerPresent = state === 'online'` — unstable set it false, disabling `canSendRoomControls()` and sync.
+- After: `peerPresent = state === 'online' || state === 'unstable'` — sync and controls stay active during the grace window. Only `'offline'` disables them.
+
+**`peer_joined` handler — call-active guard**
+- Added early return if `callState === 'active'` or `'connecting'`.
+- In that case only `addPeerToUI()` is called — no presence reset, no ready state wipe, no toast.
+- Prevents a stale or race-delayed `peer_joined` from disrupting a live call session.
+
+**`peer_reconnecting` handler — inline, explicit**
+- Replaced the `handleReconnect()` delegation with inline logic that makes the spec contract visible in the code.
+- Sets `presenceState = 'unstable'`, shows reconnecting UI, starts the offline fallback timer.
+- Explicitly does NOT end the call or pause video — comment documents the intent.
+
+**`peer_reconnected` handler — inline, explicit**
+- Replaced the `handleRecovery()` delegation with inline logic.
+- Sets `presenceState = 'online'`, clears the offline timer, hides the reconnecting UI.
+- Calls `maybeResumeCall()` directly — which internally checks whether ICE actually needs help before doing anything, so this is a no-op when ICE self-recovered.
+- Explicitly does NOT emit `peer_joined` or restart the call.
+
+### State matrix after fix
+
+| Event | signalingState | presenceState | callState | peerPresent | Call action |
+|---|---|---|---|---|---|
+| `peer_reconnecting` | connected | unstable | active (unchanged) | true | none |
+| `peer_reconnected` | connected | online | active (unchanged) | true | maybeResume (ICE-gated) |
+| `peer_left` (timeout) | connected | offline | ended | false | endCall |
+| `peer_joined` (active call) | connected | online | active (unchanged) | true | UI update only |
+
+### Files changed
+- `frontend/src/app.js` — `setPresenceState`, `peer_joined`, `peer_reconnecting`, `peer_reconnected` handlers.
+- No changes to `client.js` — event emission was already correct.
+- No changes to WebRTC signaling, playback sync, or YouTube logic.
+
+---
+
 ## Notes & Known Limitations
 
 - **TURN server:** `openrelay.metered.ca` is free/unreliable. Replace with a paid TURN service (Twilio, Xirsys, Metered Pro) for production stability on strict NATs.

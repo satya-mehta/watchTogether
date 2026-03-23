@@ -141,11 +141,13 @@ let trackRefreshTimeout = null;
 let localSubtitleTrackEl = null;
 let localSubtitleObjectUrl = null;
 let localSubtitleFileName = null;
-const appState = {
+// ── Global state object (single source of truth) ─────────────────────────
+const state = {
   signalingState: 'disconnected',
   presenceState: 'offline',
   callState: 'idle',
 };
+const appState = state;
 const uiState = {
   activeScreen: 'landing',
   isEditingName: false,
@@ -169,20 +171,14 @@ const PRESENCE_OFFLINE_TIMEOUT_MS = 10000;
 const RESUME_AFTER_RECOVERY_DELAY_MS = 4000;
 const RESUME_AFTER_ICE_DISCONNECT_DELAY_MS = 8500;
 const RESUME_AFTER_ICE_FAILED_DELAY_MS = 2500;
-const PEER_RESUME_REQUEST_DELAY_MS = 7000;
-const PEER_RESUME_REQUEST_EXTRA_DELAY_MS = 2500;
-const PEER_RESUME_REQUEST_COOLDOWN_MS = 6000;
-const RESUME_LOCK_MS = 6000;
-let presenceOfflineTimer = null;
+let reconnectTimeout = null;
 let resumeCheckTimer = null;
-let peerResumeRequestTimer = null;
 let resumeLockTimer = null;
 let isResuming = false;
 let lastIceConnectionState = 'new';
 let callHasEverConnected = false;
 let callConnectionAnnounced = false;
 let iceUnhealthySince = 0;
-let lastResumeRequestAt = 0;
 
 // ── YouTube mode state ────────────────────────────────────────────────────
 let roomMode        = 'local';  // 'local' | 'youtube'
@@ -355,17 +351,20 @@ function setSyncStatus(message, tone = 'idle') {
   if (syncDot) syncDot.className = `sdot ${tone}`;
 }
 
-function setSignalingState(state) {
-  appState.signalingState = state;
+function setSignalingState(nextState) {
+  state.signalingState = nextState;
 }
 
-function setPresenceState(state) {
-  appState.presenceState = state;
-  peerPresent = state === 'online';
+function setPresenceState(nextState) {
+  state.presenceState = nextState;
+  // peerPresent is derived: true when peer is either fully online OR in the
+  // reconnect grace window ('unstable'). This keeps sync heartbeats and room
+  // controls active during temporary disconnects without halting playback.
+  peerPresent = nextState === 'online' || nextState === 'unstable';
 }
 
-function setCallState(state) {
-  appState.callState = state;
+function setCallState(nextState) {
+  state.callState = nextState;
 }
 
 function setActiveScreen(screen) {
@@ -738,10 +737,14 @@ function applyPeerMediaState({ participantId, isCameraOn, isMicOn } = {}) {
   });
 }
 
+function clearReconnectTimeout() {
+  if (!reconnectTimeout) return;
+  clearTimeout(reconnectTimeout);
+  reconnectTimeout = null;
+}
+
 function clearPresenceOfflineTimer() {
-  if (!presenceOfflineTimer) return;
-  clearTimeout(presenceOfflineTimer);
-  presenceOfflineTimer = null;
+  clearReconnectTimeout();
 }
 
 function clearResumeCheckTimer() {
@@ -750,27 +753,12 @@ function clearResumeCheckTimer() {
   resumeCheckTimer = null;
 }
 
-function clearPeerResumeRequestTimer() {
-  if (!peerResumeRequestTimer) return;
-  clearTimeout(peerResumeRequestTimer);
-  peerResumeRequestTimer = null;
-}
-
 function clearResumeLock() {
   if (resumeLockTimer) {
     clearTimeout(resumeLockTimer);
     resumeLockTimer = null;
   }
   isResuming = false;
-}
-
-function beginResumeLock() {
-  clearResumeLock();
-  isResuming = true;
-  resumeLockTimer = window.setTimeout(() => {
-    resumeLockTimer = null;
-    isResuming = false;
-  }, RESUME_LOCK_MS);
 }
 
 function getCurrentIceState() {
@@ -788,17 +776,14 @@ function isIceRecoveryState(state = getCurrentIceState()) {
 function cancelPendingResumeIfRecovered(state = getCurrentIceState()) {
   if (!isIceConnected(state)) return false;
   clearResumeCheckTimer();
-  clearPeerResumeRequestTimer();
   clearResumeLock();
   return true;
 }
 
 function resetIceRecoveryState() {
   clearResumeCheckTimer();
-  clearPeerResumeRequestTimer();
   clearResumeLock();
   iceUnhealthySince = 0;
-  lastResumeRequestAt = 0;
 }
 
 function markIceUnhealthy(state = getCurrentIceState()) {
@@ -818,19 +803,6 @@ function getRemainingIceDisconnectGraceMs(now = Date.now()) {
   return Math.max(0, RESUME_AFTER_ICE_DISCONNECT_DELAY_MS - getIceUnhealthyDurationMs(now));
 }
 
-function shouldAttemptResume(state = getCurrentIceState(), now = Date.now()) {
-  if (isIceConnected(state)) return false;
-  if (state === 'failed') return true;
-  if (state === 'disconnected' || state === 'checking') {
-    return getIceUnhealthyDurationMs(now) >= RESUME_AFTER_ICE_DISCONNECT_DELAY_MS;
-  }
-  return false;
-}
-
-function getPeerResumeFallbackDelayMs(delayMs = 0) {
-  return Math.max(PEER_RESUME_REQUEST_DELAY_MS, delayMs + PEER_RESUME_REQUEST_EXTRA_DELAY_MS);
-}
-
 function showReconnectingUI(message = 'Reconnecting…') {
   setSyncStatus(message, 'warn');
 }
@@ -844,8 +816,8 @@ function endCallForOffline({
   toastVariant = 'warn',
   statusMessage = 'Waiting for your friend to join',
 } = {}) {
-  const hadActiveCall = !!call || ['active', 'connecting'].includes(appState.callState);
-  clearPresenceOfflineTimer();
+  const hadActiveCall = !!call || ['active', 'connecting'].includes(state.callState);
+  clearReconnectTimeout();
   resetIceRecoveryState();
   if (toastMessage) showToast(toastMessage, toastVariant);
   call?.end();
@@ -854,34 +826,61 @@ function endCallForOffline({
   callHasEverConnected = false;
   callConnectionAnnounced = false;
   lastIceConnectionState = 'new';
-  lastResumeRequestAt = 0;
   setCallState(hadActiveCall ? 'ended' : 'idle');
   resetReadyState({ disable: true });
   setSyncStatus(statusMessage, 'idle');
 }
 
-function schedulePresenceOfflineTimeout({ name = getPeerDisplayName() } = {}) {
-  // Re-arm the downgrade timer from a clean slate so rapid reconnect cycles
+function handlePeerOffline({
+  name = getPeerDisplayName(),
+  reason = 'left',
+} = {}) {
+  clearReconnectTimeout();
+
+  const alreadyOffline = state.presenceState === 'offline' && !call && !callStarting;
+
+  setPresenceState('offline');
+  removePeerFromUI();
+  updatePeerReadyState('friend', false);
+  clearSyncPlaybackRate();
+  readyBtn?.classList.remove('peer-wants-you');
+
+  if (alreadyOffline) return;
+
+  if (roomMode === 'youtube') {
+    if (ytPlayer && ytPlayerReady) {
+      ytPlayer.pauseVideo();
+      ytIsPaused = true;
+    }
+  } else {
+    movieVideo.pause();
+  }
+
+  const toastMessage = reason === 'reconnect_timeout'
+    ? `${name || 'Your friend'} could not reconnect`
+    : `${name || 'Your friend'} left the room`;
+
+  endCallForOffline({
+    toastMessage,
+    toastVariant: reason === 'reconnect_timeout' ? 'warn' : 'info',
+  });
+}
+
+function startReconnectTimeout({ name = getPeerDisplayName() } = {}) {
+  // Re-arm the reconnect timeout from a clean slate so rapid reconnect cycles
   // cannot leave multiple offline timers running at once.
-  clearPresenceOfflineTimer();
-  presenceOfflineTimer = window.setTimeout(() => {
-    presenceOfflineTimer = null;
-    if (appState.presenceState === 'online') return;
-    setPresenceState('offline');
-    removePeerFromUI();
-    updatePeerReadyState('friend', false);
-    readyBtn?.classList.remove('peer-wants-you');
-    endCallForOffline({
-      toastMessage: `${name || 'Your friend'} could not reconnect`,
-      toastVariant: 'warn',
-    });
+  clearReconnectTimeout();
+  reconnectTimeout = window.setTimeout(() => {
+    reconnectTimeout = null;
+    if (state.presenceState === 'online') return;
+    handlePeerOffline({ name, reason: 'reconnect_timeout' });
   }, PRESENCE_OFFLINE_TIMEOUT_MS);
 }
 
 function handleReconnect({ name = getPeerDisplayName() } = {}) {
   setPresenceState('unstable');
   showReconnectingUI(`${name || 'Your friend'} is reconnecting…`);
-  schedulePresenceOfflineTimeout({ name });
+  startReconnectTimeout({ name });
 }
 
 function handleRecovery({
@@ -889,107 +888,85 @@ function handleRecovery({
   requestResume = true,
   delayMs = RESUME_AFTER_RECOVERY_DELAY_MS,
 } = {}) {
-  clearPresenceOfflineTimer();
+  clearReconnectTimeout();
   setPresenceState('online');
   hideReconnectingUI(message);
   if (requestResume) maybeResumeCall({ reason: 'recovery', delayMs });
 }
 
 function maybeResumeCall({ reason = 'unknown', delayMs = 0 } = {}) {
-  if (!client || !call) return;
-  if (appState.callState !== 'active') return;
-  if (appState.signalingState !== 'connected') return;
-  if (appState.presenceState !== 'online') return;
-  const iceState = getCurrentIceState();
-  if (cancelPendingResumeIfRecovered(iceState)) return;
-  if (!isIceRecoveryState(iceState)) return;
-  const effectiveDelayMs = shouldAttemptResume(iceState)
-    ? Math.max(0, delayMs)
-    : Math.max(delayMs, getRemainingIceDisconnectGraceMs());
+  if (!call) return;
+  if (isResuming) return;
+  if (
+    state.callState === 'active' &&
+    state.signalingState === 'connected' &&
+    state.presenceState === 'online' &&
+    !isIceConnected(call.iceState)
+  ) {
+    isResuming = true;
 
-  if (!isHost) {
-    const requestResumeFromHost = () => {
-      if (!client || !call) return;
-      if (appState.callState !== 'active') return;
-      if (appState.signalingState !== 'connected' || appState.presenceState !== 'online') return;
-      if (cancelPendingResumeIfRecovered()) return;
-      if (!shouldAttemptResume()) return;
+    const runResume = () => {
+      resumeCheckTimer = null;
 
-      const now = Date.now();
-      if ((now - lastResumeRequestAt) < PEER_RESUME_REQUEST_COOLDOWN_MS) return;
+      if (
+        !call ||
+        state.callState !== 'active' ||
+        state.signalingState !== 'connected' ||
+        state.presenceState !== 'online' ||
+        isIceConnected(call.iceState)
+      ) {
+        isResuming = false;
+        return;
+      }
 
-      clearPeerResumeRequestTimer();
-      lastResumeRequestAt = now;
-      console.log(`[Call] Requesting initiator resume (${reason})`);
-      client.requestCallResume();
+      showReconnectingUI('Re-establishing call…');
+      Promise.resolve(call.requestOffer({ iceRestart: true })).catch((err) => {
+        console.warn(`call resume failed (${reason}):`, err?.message || err);
+      });
+
+      if (resumeLockTimer) clearTimeout(resumeLockTimer);
+      resumeLockTimer = window.setTimeout(() => {
+        resumeLockTimer = null;
+        isResuming = false;
+      }, 3000);
     };
 
-    const fallbackDelayMs = getPeerResumeFallbackDelayMs(effectiveDelayMs);
-    clearPeerResumeRequestTimer();
-    peerResumeRequestTimer = window.setTimeout(() => {
-      peerResumeRequestTimer = null;
-      if (cancelPendingResumeIfRecovered()) return;
-      requestResumeFromHost();
-    }, fallbackDelayMs);
-    return;
-  }
-
-  const runResume = async () => {
-    if (!client || !call) return;
-    if (appState.callState !== 'active') return;
-    if (appState.signalingState !== 'connected' || appState.presenceState !== 'online') return;
-    if (cancelPendingResumeIfRecovered()) return;
-    if (!shouldAttemptResume() || isResuming) return;
-
-    beginResumeLock();
-    showReconnectingUI('Re-establishing call…');
-
-    try {
-      await call.requestOffer({ iceRestart: true });
-    } catch (err) {
-      console.warn(`call resume failed (${reason}):`, err?.message || err);
-    }
-  };
-
-  if (effectiveDelayMs > 0) {
     clearResumeCheckTimer();
-    resumeCheckTimer = window.setTimeout(() => {
-      resumeCheckTimer = null;
-      if (cancelPendingResumeIfRecovered()) return;
-      void runResume();
-    }, effectiveDelayMs);
-    return;
-  }
+    if (delayMs > 0) {
+      resumeCheckTimer = window.setTimeout(runResume, delayMs);
+      return;
+    }
 
-  void runResume();
+    runResume();
+  }
 }
 
-function handleCallIceState(state) {
-  lastIceConnectionState = state || 'new';
+function handleCallIceState(iceState) {
+  lastIceConnectionState = iceState || 'new';
 
-  if (isIceConnected(state)) {
+  if (isIceConnected(iceState)) {
     const wasConnected = callHasEverConnected;
     callHasEverConnected = true;
     resetIceRecoveryState();
-    if (appState.callState !== 'ended') setCallState('active');
-    if (appState.presenceState === 'online' && appState.signalingState === 'connected') {
+    if (state.callState !== 'ended') setCallState('active');
+    if (state.presenceState === 'online' && state.signalingState === 'connected') {
       hideReconnectingUI(wasConnected ? 'Connected again' : 'Call connected');
     }
     return;
   }
 
-  if (!call || appState.callState !== 'active' || !callHasEverConnected) return;
-  markIceUnhealthy(state);
+  if (!call || state.callState !== 'active' || !callHasEverConnected) return;
+  markIceUnhealthy(iceState);
 
-  if (state === 'failed') {
+  if (iceState === 'failed') {
     showReconnectingUI('Call reconnecting…');
     maybeResumeCall({ reason: 'ice-failed', delayMs: RESUME_AFTER_ICE_FAILED_DELAY_MS });
     return;
   }
 
-  if (state === 'disconnected') {
+  if (iceState === 'disconnected') {
     showReconnectingUI(
-      appState.presenceState === 'unstable'
+      state.presenceState === 'unstable'
         ? `${getPeerDisplayName()} is reconnecting…`
         : 'Call reconnecting…'
     );
@@ -1000,7 +977,7 @@ function handleCallIceState(state) {
     return;
   }
 
-  if (state === 'checking') {
+  if (iceState === 'checking') {
     showReconnectingUI('Re-establishing call…');
     maybeResumeCall({
       reason: 'ice-checking',
@@ -1556,7 +1533,6 @@ function leaveWatchToLobby({ clearFile = false, keepCall = true, notice = '' } =
     callHasEverConnected = false;
     callConnectionAnnounced = false;
     lastIceConnectionState = 'new';
-    lastResumeRequestAt = 0;
     showCallUI(false);
     setCallState('idle');
   } else if (call) {
@@ -1624,7 +1600,6 @@ function resetToLanding(message = '') {
   callHasEverConnected = false;
   callConnectionAnnounced = false;
   lastIceConnectionState = 'new';
-  lastResumeRequestAt = 0;
   setPresenceState('offline');
   setSignalingState('disconnected');
   setCallState('idle');
@@ -1675,7 +1650,6 @@ function leaveRoomAndGoHome(message = '') {
   callHasEverConnected = false;
   callConnectionAnnounced = false;
   lastIceConnectionState = 'new';
-  lastResumeRequestAt = 0;
   setCallState('idle');
   setPresenceState('offline');
   setSignalingState('disconnected');
@@ -1869,20 +1843,20 @@ async function autoJoinFromPath() {
 // ═════════════════════════════════════════════════════════════════════════════
 
 function wireClientEvents() {
-  client.on('signaling_state', ({ state, resumed = false }) => {
-    setSignalingState(state);
-    if (state === 'reconnecting') {
+  client.on('signaling_state', ({ state: s, resumed = false }) => {
+    setSignalingState(s);
+    if (s === 'reconnecting') {
       setSyncStatus('Connection lost — reconnecting…', 'warn');
       return;
     }
-    if (state === 'disconnected' && roomCode) {
+    if (s === 'disconnected' && roomCode) {
       setSyncStatus('Disconnected from room', 'warn');
       return;
     }
-    if (state === 'connected' && resumed) {
+    if (s === 'connected' && resumed) {
       queueMediaSync('signaling-restored');
       if (appState.presenceState === 'online') setSyncStatus('Connected again', 'ok');
-      else if (appState.presenceState === 'unstable') setSyncStatus('Connected — waiting for your friend to resume', 'warn');
+      else if (appState.presenceState === 'unstable') setSyncStatus('Connected — waiting for your friend', 'warn');
       else setSyncStatus('Waiting for your friend to join', 'idle');
     }
   });
@@ -1900,7 +1874,7 @@ function wireClientEvents() {
       if (otherPeer.connectionState === 'reconnecting') {
         handleReconnect({ name: otherPeer.name });
       } else {
-        clearPresenceOfflineTimer();
+        clearReconnectTimeout();
         setPresenceState('online');
       }
       updatePeerReadyState(otherPeer.peerId, !!otherPeer.isReady);
@@ -1908,7 +1882,7 @@ function wireClientEvents() {
         updatePeerFileStatus(otherPeer.peerId, otherPeer.fileDuration, otherPeer.fileName);
       }
     } else {
-      clearPresenceOfflineTimer();
+      clearReconnectTimeout();
       setPresenceState('offline');
       removePeerFromUI();
       updatePeerReadyState('friend', false);
@@ -1949,7 +1923,11 @@ function wireClientEvents() {
   });
 
   client.on('peer_joined', (data) => {
-    clearPresenceOfflineTimer();
+    if (state.presenceState !== 'offline') {
+      console.warn('[Guard] Ignoring peer_joined during active session');
+      return;
+    }
+    clearReconnectTimeout();
     setPresenceState('online');
     addPeerToUI(data);
     updatePeerReadyState(data.peerId, false);
@@ -1958,18 +1936,18 @@ function wireClientEvents() {
   });
 
   client.on('peer_reconnecting', ({ name }) => {
-    handleReconnect({ name });
+    handleReconnect({ name: name || getPeerDisplayName() });
   });
 
   client.on('peer_reconnected', (data) => {
     addPeerToUI(data);
-    queueMediaSync('peer-reconnected');
-    flushQueuedMediaSync();
     handleRecovery({
       message: 'Connected again',
       requestResume: true,
       delayMs: RESUME_AFTER_RECOVERY_DELAY_MS,
     });
+    queueMediaSync('peer-reconnected');
+    flushQueuedMediaSync();
   });
 
   client.on('peer_name_updated', ({ participantId, name }) => {
@@ -1984,29 +1962,9 @@ function wireClientEvents() {
   client.on('sync_media_state', (payload) => handleMediaSync(payload));
 
   client.on('peer_left', (data) => {
-    clearPresenceOfflineTimer();
-    resetIceRecoveryState();
-    setPresenceState('offline');
-    removePeerFromUI(data.peerId);
-    updatePeerReadyState(data.peerId, false);
-    clearSyncPlaybackRate();
-    readyBtn?.classList.remove('peer-wants-you');
-
-    if (roomMode === 'youtube') {
-      if (ytPlayer && ytPlayerReady) {
-        ytPlayer.pauseVideo();
-        ytIsPaused = true;
-      }
-    } else {
-      movieVideo.pause();
-    }
-
-    const leftMessage = data.reason === 'reconnect_timeout'
-      ? `${data.name || 'Your friend'} could not reconnect`
-      : `${data.name || 'Your friend'} left the room`;
-    endCallForOffline({
-      toastMessage: leftMessage,
-      toastVariant: data.reason === 'reconnect_timeout' ? 'warn' : 'info',
+    handlePeerOffline({
+      name: data.name || getPeerDisplayName(),
+      reason: data.reason || 'left',
     });
   });
 
@@ -2124,11 +2082,6 @@ function wireClientEvents() {
         : `${name || getPeerDisplayName()} went back to pick a different file.`,
     });
     showToast(`${name || getPeerDisplayName()} went back to ${roomMode === 'youtube' ? 'change video' : 'file selection'}`, 'info');
-  });
-
-  client.on('call_resume_needed', () => {
-    if (!call || !isHost) return;
-    maybeResumeCall({ reason: 'peer-requested-resume' });
   });
 
   // ── YouTube room-level events ──────────────────────────────────────────
@@ -2537,10 +2490,21 @@ async function startVideoCall() {
   callHasEverConnected = false;
   callConnectionAnnounced = false;
   lastIceConnectionState = 'new';
-  lastResumeRequestAt = 0;
   setCallState('connecting');
   call = new VideoCall(client, localVideo, remoteVideo);
   window.activeCall = call;
+  call.addEventListener('ice_state', ({ detail }) => {
+    const ice = detail.state;
+
+    if (ice === 'failed') {
+      maybeResumeCall({ reason: 'ice-failed' });
+    }
+
+    if (ice === 'connected') {
+      clearReconnectTimeout();
+      isResuming = false;
+    }
+  });
 
   call
     .on('started', ({ hasVideo, hasAudio }) => {
@@ -2566,7 +2530,7 @@ async function startVideoCall() {
       renderRemoteMediaUI();
     })
     .on('remote_play_blocked', () => {
-      showToast('Tap once if your friend’s video does not appear', 'info');
+      showToast('Tap once if your friend\u2019s video does not appear', 'info');
     })
     .on('connected', () => {
       handleCallIceState(call?.iceState || 'connected');
@@ -2585,10 +2549,9 @@ async function startVideoCall() {
       showToast('Camera not available — audio only');
     })
     .on('ice_failed', () => {
-      endCallForOffline({
-        toastMessage: 'Video call could not reconnect — network may be blocking P2P. Try again.',
-        statusMessage: 'Call ended — waiting for your friend',
-      });
+      if (state.presenceState === 'offline') return;
+      showReconnectingUI('Call reconnecting…');
+      maybeResumeCall({ reason: 'ice-failed-event', delayMs: RESUME_AFTER_ICE_FAILED_DELAY_MS });
     })
     .on('quality_changed', ({ tier }) => {
       const toastMessages = {
@@ -2631,7 +2594,6 @@ async function startVideoCall() {
       callHasEverConnected = false;
       callConnectionAnnounced = false;
       lastIceConnectionState = 'new';
-      lastResumeRequestAt = 0;
       // Reset quality badge
       const badge = document.getElementById('pip-quality-badge');
       if (badge) badge.style.display = 'none';
@@ -2680,7 +2642,6 @@ endCallBtn?.addEventListener('click', () => {
   callHasEverConnected = false;
   callConnectionAnnounced = false;
   lastIceConnectionState = 'new';
-  lastResumeRequestAt = 0;
   setCallState('ended');
 });
 

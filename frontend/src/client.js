@@ -22,8 +22,14 @@ const KEEPALIVE_INTERVAL_MS = 600000;
 // this long so the local video element has time to seek before we start
 // reporting our position again. Avoids the phantom-drift feedback loop.
 const SYNC_SUPPRESS_AFTER_SEEK_MS = 1500;
+
 const PARTICIPANT_ID_STORAGE_KEY = 'watchTogetherParticipantId';
 
+// ── State constants ────────────────────────────────────────────────────────
+// These are the canonical state values for the three state dimensions.
+// Import these from this module if you need to compare against them in app.js.
+
+/** @typedef {'connected'|'reconnecting'|'disconnected'} SignalingState */
 function generateParticipantId() {
   if (typeof globalThis.crypto?.randomUUID === 'function') return globalThis.crypto.randomUUID();
   return `pt-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
@@ -61,6 +67,25 @@ class WatchTogetherClient extends EventTarget {
 
     // BUG FIX: track when to suppress sync_check sends (after seek/nudge)
     this._syncSuppressUntil = 0;
+
+    // ── Signaling state ─────────────────────────────────────────────────
+    // Presence and call lifecycle are owned by the integration layer.
+
+    /** @type {SignalingState} */
+    this.signalingState = 'disconnected';
+  }
+
+  // ── State helpers ─────────────────────────────────────────────────────
+
+  _setSignalingState(state) {
+    this.signalingState = state;
+    this._emit('signaling_state_change', { state });
+  }
+
+  _emitSignalingState(state, detail = {}) {
+    this._setSignalingState(state);
+    this._emit('signaling_state', { state, ...detail });
+    this._emit(state, { state, ...detail });
   }
 
   // ── Connection ────────────────────────────────────────────────────────
@@ -73,7 +98,7 @@ class WatchTogetherClient extends EventTarget {
         console.log('[WT] Connected');
         this._reconnectDelay = 1000;
         this._startKeepalive();
-        this._emit('signaling_state', { state: 'connected', resumed: this._isReconnectAttempt });
+        this._emitSignalingState('connected', { resumed: this._isReconnectAttempt });
         this._isReconnectAttempt = false;
         resolve();
       };
@@ -90,15 +115,13 @@ class WatchTogetherClient extends EventTarget {
       this.ws.onclose = () => {
         if (!this._shouldReconnect) {
           console.log('[WT] Disconnected');
-          this._emit('signaling_state', { state: 'disconnected' });
-          this._emit('disconnected');
+          this._emitSignalingState('disconnected');
           this._stopSync();
           this._stopKeepalive();
           return;
         }
         console.warn('[WT] Disconnected — reconnecting in', this._reconnectDelay, 'ms');
-        this._emit('signaling_state', { state: 'reconnecting' });
-        this._emit('disconnected');
+        this._emitSignalingState('reconnecting', { retryInMs: this._reconnectDelay });
         this._stopSync();
         this._stopKeepalive();
         setTimeout(() => this._reconnect(), this._reconnectDelay);
@@ -186,10 +209,6 @@ class WatchTogetherClient extends EventTarget {
 
   returnToLobby() {
     this._send('return_to_lobby');
-  }
-
-  requestCallResume() {
-    this._send('call_resume_needed');
   }
 
   sendCameraToggle({ isCameraOn, isMicOn }) {
@@ -314,9 +333,6 @@ class WatchTogetherClient extends EventTarget {
         // sync_nudge is only ever sent to the non-master (the peer with drift).
         // Suppress sync_checks so we don't immediately re-report a stale position
         // before the seek has landed.
-        // Safety check: only suppress if the message is addressed to us (i.e.
-        // we are NOT the master in this message). The master never receives
-        // nudges but this guards against any unexpected routing.
         if (rest.masterId && rest.masterId !== this.peerId) {
           this._syncSuppressUntil = Date.now() + SYNC_SUPPRESS_AFTER_SEEK_MS;
         }
@@ -355,10 +371,6 @@ class WatchTogetherClient extends EventTarget {
         }
         break;
 
-      case 'call_resume_needed':
-        this._emit('call_resume_needed', rest);
-        break;
-
       case 'return_to_lobby':
         this._emit('return_to_lobby', rest);
         break;
@@ -377,7 +389,6 @@ class WatchTogetherClient extends EventTarget {
         // If the server says the room is full or gone, continuing to reconnect
         // and re-join will never succeed — it just floods the server with
         // failing join attempts (the "Not in a room" spam in the logs).
-        // Stop the reconnect loop and let the UI handle it gracefully.
         if (rest.message === 'Room full' || rest.message === 'Room not found') {
           this._shouldReconnect = false;
           this.roomCode = null;
@@ -450,8 +461,10 @@ class WatchTogetherClient extends EventTarget {
     this._stopSync();
     this._stopKeepalive();
     this._send('leave_room');
-    this.ws?.close();
+    const socket = this.ws;
     this.ws = null;
+    if (socket) socket.close();
+    else this._emitSignalingState('disconnected');
   }
 }
 
