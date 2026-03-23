@@ -85,20 +85,10 @@ const readyBtn      = document.getElementById('ready-btn');
 const landingAlert  = document.getElementById('landing-alert');
 const createRoomBtnLabel = createRoomBtn?.querySelector('.btn-label');
 const versionBadge  = document.getElementById('version-badge');
-const landingNameDisplay = document.getElementById('landing-display-name');
-const landingNameInput = document.getElementById('landing-name-input');
-const landingNameEditor = document.getElementById('landing-name-editor');
-const landingNameEditBtn = document.getElementById('landing-name-edit-btn');
-const landingNameSaveBtn = document.getElementById('landing-name-save-btn');
-const landingNameCancelBtn = document.getElementById('landing-name-cancel-btn');
-const landingAvatar = document.getElementById('landing-avatar');
-const lobbyNameDisplay = document.getElementById('lobby-display-name');
-const lobbyProfileAvatar = document.getElementById('lobby-profile-avatar');
-const lobbyNameInput = document.getElementById('lobby-name-input');
-const lobbyNameEditor = document.getElementById('lobby-name-editor');
-const lobbyNameEditBtn = document.getElementById('lobby-name-edit-btn');
-const lobbyNameSaveBtn = document.getElementById('lobby-name-save-btn');
-const lobbyNameCancelBtn = document.getElementById('lobby-name-cancel-btn');
+const selfNameInline = document.getElementById('self-name-inline');
+const selfNameText = document.getElementById('self-name-text');
+const selfNameEditBtn = document.getElementById('self-name-edit-btn');
+const selfNameEditIcon = document.getElementById('self-name-edit-icon');
 const yourAvatar = document.getElementById('your-avatar');
 const friendAvatar = document.getElementById('friend-avatar');
 const remoteMicBadge = document.getElementById('remote-mic-badge');
@@ -158,7 +148,7 @@ const appState = {
 };
 const uiState = {
   activeScreen: 'landing',
-  editingNameSurface: null,
+  isEditingName: false,
 };
 const remotePeerState = {
   participantId: null,
@@ -380,7 +370,7 @@ function setCallState(state) {
 
 function setActiveScreen(screen) {
   if (!screenEls[screen]) return;
-  if (uiState.activeScreen !== screen) exitNameEditMode();
+  if (uiState.activeScreen !== screen) commitInlineNameEdit();
   uiState.activeScreen = screen;
   Object.entries(screenEls).forEach(([key, element]) => {
     element?.classList.toggle('active', key === screen);
@@ -389,45 +379,151 @@ function setActiveScreen(screen) {
   if (versionBadge) versionBadge.hidden = screen === 'watch';
 }
 
-function renderNameEditor(surface, isEditing) {
-  const isLanding = surface === 'landing';
-  const editor = isLanding ? landingNameEditor : lobbyNameEditor;
-  const input = isLanding ? landingNameInput : lobbyNameInput;
-  const display = editor?.querySelector('[data-name-display]');
-  const editRow = editor?.querySelector('[data-name-edit-row]');
-  if (!editor || !input || !display || !editRow) return;
-  display.hidden = isEditing;
-  editRow.hidden = !isEditing;
-  if (isEditing) input.value = myName;
+function placeCaretAtEnd(element) {
+  if (!element) return;
+  const selection = window.getSelection?.();
+  if (!selection) return;
+  const range = document.createRange();
+  range.selectNodeContents(element);
+  range.collapse(false);
+  selection.removeAllRanges();
+  selection.addRange(range);
 }
 
-function exitNameEditMode() {
-  uiState.editingNameSurface = null;
-  renderNameEditor('landing', false);
-  renderNameEditor('lobby', false);
+function insertTextAtCursor(text) {
+  const selection = window.getSelection?.();
+  if (!selection?.rangeCount) return;
+  selection.deleteFromDocument();
+  const range = selection.getRangeAt(0);
+  const node = document.createTextNode(text);
+  range.insertNode(node);
+  range.setStartAfter(node);
+  range.collapse(true);
+  selection.removeAllRanges();
+  selection.addRange(range);
 }
 
-function enterNameEditMode(surface) {
-  uiState.editingNameSurface = surface;
-  renderNameEditor('landing', surface === 'landing');
-  renderNameEditor('lobby', surface === 'lobby');
-  const input = surface === 'landing' ? landingNameInput : lobbyNameInput;
-  input?.focus();
-  input?.select();
+function normalizeInlineEditableName(value) {
+  return String(value || '')
+    .replace(/[\r\n]+/g, ' ')
+    .replace(/\s{2,}/g, ' ')
+    .slice(0, 32);
+}
+
+function syncInlineNameEditorState() {
+  if (!selfNameText || !selfNameEditBtn || !selfNameEditIcon) return;
+  selfNameText.setAttribute('contenteditable', uiState.isEditingName ? 'true' : 'false');
+  selfNameText.classList.toggle('is-editing', uiState.isEditingName);
+  selfNameEditIcon.textContent = uiState.isEditingName ? 'check' : 'edit';
+  selfNameEditBtn.setAttribute('aria-label', uiState.isEditingName ? 'Save display name' : 'Edit your display name');
+  selfNameEditBtn.title = uiState.isEditingName ? 'Save display name' : 'Edit your display name';
+}
+
+function startInlineNameEdit() {
+  if (!selfNameText || uiState.isEditingName) return;
+  uiState.isEditingName = true;
+  selfNameText.textContent = myName;
+  selfNameText.style.minWidth = `${Math.max(72, Math.ceil(selfNameText.getBoundingClientRect().width))}px`;
+  syncInlineNameEditorState();
+  window.requestAnimationFrame(() => {
+    selfNameText.focus({ preventScroll: true });
+    placeCaretAtEnd(selfNameText);
+  });
+}
+
+function commitInlineNameEdit({ revert = false } = {}) {
+  if (!uiState.isEditingName) return myName;
+  const fallbackName = myName;
+  const nextName = revert
+    ? fallbackName
+    : (sanitizeDisplayName(selfNameText?.textContent) || fallbackName);
+  uiState.isEditingName = false;
+  if (selfNameText) {
+    selfNameText.blur();
+    selfNameText.style.minWidth = '';
+  }
+  syncInlineNameEditorState();
+  if (revert) {
+    renderLocalProfileUI();
+    return fallbackName;
+  }
+  return applyLocalDisplayName(nextName);
+}
+
+function wireInlineNameEditor() {
+  if (!selfNameText || !selfNameEditBtn) return;
+
+  selfNameEditBtn.addEventListener('pointerdown', (event) => {
+    if (uiState.isEditingName) event.preventDefault();
+  });
+
+  selfNameEditBtn.addEventListener('click', (event) => {
+    event.preventDefault();
+    if (uiState.isEditingName) {
+      commitInlineNameEdit();
+      return;
+    }
+    startInlineNameEdit();
+  });
+
+  selfNameText.addEventListener('keydown', (event) => {
+    if (!uiState.isEditingName) return;
+    if (event.key === 'Enter') {
+      event.preventDefault();
+      commitInlineNameEdit();
+      return;
+    }
+    if (event.key === 'Escape') {
+      event.preventDefault();
+      commitInlineNameEdit({ revert: true });
+    }
+  });
+
+  selfNameText.addEventListener('beforeinput', (event) => {
+    if (!uiState.isEditingName) return;
+    if (event.inputType === 'insertParagraph') event.preventDefault();
+  });
+
+  selfNameText.addEventListener('input', () => {
+    if (!uiState.isEditingName || !selfNameText) return;
+    const normalized = normalizeInlineEditableName(selfNameText.textContent);
+    if (normalized === selfNameText.textContent) return;
+    selfNameText.textContent = normalized;
+    placeCaretAtEnd(selfNameText);
+  });
+
+  selfNameText.addEventListener('paste', (event) => {
+    if (!uiState.isEditingName) return;
+    event.preventDefault();
+    insertTextAtCursor(normalizeInlineEditableName(event.clipboardData?.getData('text/plain') || ''));
+  });
+
+  selfNameText.addEventListener('blur', () => {
+    if (!uiState.isEditingName) return;
+    window.setTimeout(() => {
+      if (!uiState.isEditingName) return;
+      if (selfNameInline?.contains(document.activeElement)) return;
+      commitInlineNameEdit();
+    }, 0);
+  });
+
+  document.addEventListener('pointerdown', (event) => {
+    if (!uiState.isEditingName) return;
+    if (selfNameInline?.contains(event.target)) return;
+    commitInlineNameEdit();
+  });
+
+  syncInlineNameEditorState();
 }
 
 function renderLocalProfileUI() {
   const initials = getDisplayInitials(myName);
-  if (landingNameDisplay) landingNameDisplay.textContent = myName;
-  if (lobbyNameDisplay) lobbyNameDisplay.textContent = myName;
-  if (landingAvatar) landingAvatar.textContent = initials;
-  if (lobbyProfileAvatar) lobbyProfileAvatar.textContent = initials;
   if (yourAvatar) yourAvatar.textContent = initials;
-  const selfTag = document.querySelector('.ptag.pmyself');
-  if (selfTag) selfTag.textContent = `You • ${myName}`;
+  if (selfNameText && !uiState.isEditingName) selfNameText.textContent = myName;
   const countdownAvatar = document.getElementById('cd-av-you');
   if (countdownAvatar) countdownAvatar.textContent = initials;
   chat.setMyName(myName);
+  syncInlineNameEditorState();
 }
 
 function rememberParticipantName(participantId, nextName) {
@@ -550,7 +646,6 @@ function handleNameUpdate({
     renderLocalProfileUI();
     const localParticipantId = participantId || client?.participantId;
     if (localParticipantId) rememberParticipantName(localParticipantId, myName);
-    exitNameEditMode();
     if (broadcast && client && myName !== previousName) client.updateName(myName);
     return myName;
   }
@@ -571,29 +666,6 @@ function applyLocalDisplayName(nextName, { broadcast = true } = {}) {
     name: normalizedName,
     isLocal: true,
     broadcast,
-  });
-}
-
-function saveEditedDisplayName(surface) {
-  const input = surface === 'landing' ? landingNameInput : lobbyNameInput;
-  const normalizedName = sanitizeDisplayName(input?.value);
-  applyLocalDisplayName(normalizedName || myName);
-}
-
-function wireNameEditor(surface, { editBtn, saveBtn, cancelBtn, input } = {}) {
-  editBtn?.addEventListener('click', () => enterNameEditMode(surface));
-  saveBtn?.addEventListener('click', () => saveEditedDisplayName(surface));
-  cancelBtn?.addEventListener('click', () => exitNameEditMode());
-  input?.addEventListener('keydown', (event) => {
-    if (event.key === 'Enter') {
-      event.preventDefault();
-      saveEditedDisplayName(surface);
-      return;
-    }
-    if (event.key === 'Escape') {
-      event.preventDefault();
-      exitNameEditMode();
-    }
   });
 }
 
@@ -1542,7 +1614,7 @@ function showLandingScreen() {
 function resetToLanding(message = '') {
   roomCode = null;
   isHost = false;
-  exitNameEditMode();
+  commitInlineNameEdit({ revert: true });
   clearPresenceOfflineTimer();
   resetIceRecoveryState();
   clearCameraUITimer();
@@ -1570,7 +1642,7 @@ function resetToLanding(message = '') {
 
 function leaveRoomAndGoHome(message = '') {
   clearSyncPlaybackRate();
-  exitNameEditMode();
+  commitInlineNameEdit({ revert: true });
   clearPresenceOfflineTimer();
   resetIceRecoveryState();
   clearCameraUITimer();
@@ -1677,18 +1749,7 @@ function checkPlaybackHealth() {
   });
 }
 
-wireNameEditor('landing', {
-  editBtn: landingNameEditBtn,
-  saveBtn: landingNameSaveBtn,
-  cancelBtn: landingNameCancelBtn,
-  input: landingNameInput,
-});
-wireNameEditor('lobby', {
-  editBtn: lobbyNameEditBtn,
-  saveBtn: lobbyNameSaveBtn,
-  cancelBtn: lobbyNameCancelBtn,
-  input: lobbyNameInput,
-});
+wireInlineNameEditor();
 renderLocalProfileUI();
 renderRemoteProfileUI();
 setActiveScreen(

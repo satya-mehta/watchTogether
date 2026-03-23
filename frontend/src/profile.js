@@ -8,7 +8,7 @@ const NAME_ADJECTIVES = [
 
 const NAME_NOUNS = [
   'Tiger', 'Falcon', 'Comet', 'Otter', 'Voyager', 'Panther', 'Harbor', 'Fox',
-  'Cedar', 'Raven', 'Wanderer', 'Orchid', 'Breeze', 'Echo', 'Lion', 'Sprinter',
+  'Cedar', 'Raven', 'Camel', 'Orchid', 'Breeze', 'Echo', 'Lion', 'senor'
 ];
 
 function pick(items) {

@@ -93,22 +93,7 @@ body{font-family:'Nunito',sans-serif;background:var(--bg);color:var(--text);min-
 .how-link:hover{color:#fff;border-color:rgba(255,255,255,.7);}
 .landing-alert{display:none;width:100%;background:rgba(249,115,22,.12);border:1px solid rgba(249,115,22,.35);border-radius:14px;padding:12px 14px;font-size:13px;line-height:1.6;color:#ffd7bf;}
 .landing-alert.show{display:block;}
-.identity-card{width:100%;background:rgba(26,31,46,.82);border:1px solid rgba(99,102,241,.16);border-radius:18px;padding:18px 18px 16px;box-shadow:0 18px 40px rgba(0,0,0,.18);}
-.name-editor{display:flex;flex-direction:column;gap:12px;}
-.name-display{display:flex;align-items:center;gap:12px;}
 .name-avatar{flex:0 0 44px;width:44px;height:44px;border-radius:14px;display:flex;align-items:center;justify-content:center;font-family:'Space Grotesk',sans-serif;font-weight:700;font-size:14px;background:linear-gradient(135deg,rgba(99,102,241,.18),rgba(236,72,153,.18));border:1px solid rgba(99,102,241,.28);color:var(--text);}
-.name-copy{flex:1;min-width:0;display:flex;flex-direction:column;gap:2px;}
-.name-overline{font-size:10px;font-weight:700;letter-spacing:2px;text-transform:uppercase;color:var(--text3);}
-.name-value{font-size:16px;font-weight:700;color:var(--text);line-height:1.3;word-break:break-word;}
-.icon-ghost-btn{border:none;background:rgba(255,255,255,.04);color:var(--text2);width:34px;height:34px;border-radius:12px;display:flex;align-items:center;justify-content:center;cursor:pointer;transition:background .2s,color .2s,transform .12s;}
-.icon-ghost-btn:hover{background:rgba(99,102,241,.14);color:#fff;transform:translateY(-1px);}
-.name-edit-row{display:flex;align-items:center;gap:8px;}
-.name-input-inline{flex:1;min-width:0;padding:11px 13px;background:rgba(15,20,25,.72);border:1px solid rgba(99,102,241,.24);border-radius:12px;color:var(--text);font:inherit;font-size:14px;outline:none;transition:border-color .2s,box-shadow .2s;}
-.name-input-inline:focus{border-color:rgba(99,102,241,.72);box-shadow:0 0 0 3px rgba(99,102,241,.14);}
-.btn-inline{border:none;border-radius:12px;padding:10px 12px;font:inherit;font-size:12px;font-weight:700;cursor:pointer;transition:opacity .2s,transform .12s;}
-.btn-inline:hover{opacity:.92;transform:translateY(-1px);}
-.btn-inline--primary{background:linear-gradient(135deg,var(--primary),var(--accent));color:#fff;}
-.btn-inline--ghost{background:rgba(255,255,255,.06);color:var(--text2);}
 .help-overlay{position:fixed;inset:0;z-index:99998;background:rgba(10,14,20,.78);backdrop-filter:blur(8px);display:none;align-items:center;justify-content:center;padding:24px;}
 .help-overlay.show{display:flex;}
 .help-card{position:relative;width:min(100%,520px);background:rgba(26,31,46,.96);border:1px solid rgba(99,102,241,.22);border-radius:24px;padding:26px 24px 22px;box-shadow:0 20px 60px rgba(0,0,0,.35);}
@@ -147,11 +132,15 @@ body{font-family:'Nunito',sans-serif;background:var(--bg);color:var(--text);min-
 .players{display:flex;gap:12px;width:100%;max-width:600px;}
 .player-card{flex:1;background:var(--bg2);border:1px solid var(--border);border-radius:20px;padding:20px 16px;display:flex;flex-direction:column;gap:12px;}
 .player-card.you{border-color:rgba(99,102,241,.3);box-shadow:0 0 12px rgba(99,102,241,.1);}
-.self-name-block{display:flex;flex-direction:column;gap:10px;}
-.player-card .name-avatar{width:38px;height:38px;border-radius:12px;font-size:12px;}
-.player-card .name-value{font-size:15px;}
-.player-card .icon-ghost-btn{width:30px;height:30px;border-radius:10px;}
 .ptag{font-size:10px;letter-spacing:2px;text-transform:uppercase;color:var(--text3);font-weight:700;}
+#self-name-inline{display:inline-flex;align-items:center;gap:6px;width:fit-content;min-height:18px;}
+.self-name-prefix{white-space:nowrap;}
+.self-name-text{display:inline-block;min-width:0;padding:0 2px;border-radius:6px;outline:none;text-transform:none;letter-spacing:.2px;font-size:12px;font-weight:700;line-height:1.4;color:var(--text2);white-space:nowrap;}
+.self-name-text[contenteditable="true"]{cursor:text;}
+.self-name-text.is-editing{background:rgba(99,102,241,.12);box-shadow:0 0 0 1px rgba(99,102,241,.28);color:var(--text);}
+.self-name-btn{border:none;background:transparent;color:var(--text3);padding:0;display:inline-flex;align-items:center;justify-content:center;cursor:pointer;transition:color .2s,transform .12s;}
+.self-name-btn:hover{color:#fff;transform:translateY(-1px);}
+.self-name-btn .material-symbols-outlined{font-size:15px;line-height:1;}
 .pav{width:44px;height:44px;border-radius:13px;display:flex;align-items:center;justify-content:center;font-size:14px;font-weight:700;font-family:'Space Grotesk',sans-serif;}
 .pav-you{background:rgba(99,102,241,.15);color:var(--primary);border:1px solid rgba(99,102,241,.4);}
 .pav-them{background:var(--bg3);color:var(--text3);border:1px solid var(--border);}
@@ -388,8 +377,6 @@ input[type=range]#seek-bar::-webkit-slider-thumb{appearance:none;width:14px;heig
   .ctrl-bar{padding:0 14px 16px;}
   .ctrl-row{gap:10px;}
   .track-row{grid-template-columns:1fr;max-width:none;}
-  .name-edit-row{flex-wrap:wrap;}
-  .name-input-inline{width:100%;}
 }
 
 /* Countdown overlay */
@@ -824,26 +811,6 @@ input[type=range]#seek-bar::-webkit-slider-thumb{appearance:none;width:14px;heig
       <div class="app-name">Watch Together<span class="dot">.</span></div>
       <div class="app-tagline">Pick a movie, share a code,<br>feel like you're on the same couch.</div>
     </div>
-    <div class="identity-card">
-      <div class="card-label">Profile</div>
-      <div class="name-editor" id="landing-name-editor">
-        <div class="name-display" data-name-display>
-          <div class="name-avatar" id="landing-avatar">WT</div>
-          <div class="name-copy">
-            <span class="name-overline">Watching As</span>
-            <strong class="name-value" id="landing-display-name">Watch Together</strong>
-          </div>
-          <button class="icon-ghost-btn" id="landing-name-edit-btn" type="button" aria-label="Edit your display name">
-            <span class="material-symbols-outlined">edit</span>
-          </button>
-        </div>
-        <div class="name-edit-row" data-name-edit-row hidden>
-          <input class="name-input-inline" id="landing-name-input" maxlength="32" type="text" autocomplete="off" spellcheck="false"/>
-          <button class="btn-inline btn-inline--primary" id="landing-name-save-btn" type="button">Save</button>
-          <button class="btn-inline btn-inline--ghost" id="landing-name-cancel-btn" type="button">Cancel</button>
-        </div>
-      </div>
-    </div>
     <div class="landing-alert" id="landing-alert"></div>
     <div class="land-cards">
       <div class="land-card">
@@ -943,7 +910,13 @@ input[type=range]#seek-bar::-webkit-slider-thumb{appearance:none;width:14px;heig
   <div class="players">
     <!-- You -->
     <div class="player-card you">
-      <div class="ptag pmyself">You</div>
+      <div class="ptag pmyself" id="self-name-inline">
+        <span class="self-name-prefix">You •</span>
+        <span class="self-name-text" id="self-name-text" aria-label="Your display name" spellcheck="false">Watch Together</span>
+        <button class="self-name-btn" id="self-name-edit-btn" type="button" aria-label="Edit your display name">
+          <span class="material-symbols-outlined" id="self-name-edit-icon">edit</span>
+        </button>
+      </div>
       <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;">
         <div class="pav pav-you" id="your-avatar">YO</div>
         <div class="mode-toggle" id="mode-toggle">
@@ -955,25 +928,6 @@ input[type=range]#seek-bar::-webkit-slider-thumb{appearance:none;width:14px;heig
             <svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor"><path d="M21.58 7.19a2.76 2.76 0 00-1.94-1.95C18.01 5 12 5 12 5s-6.01 0-7.64.24A2.76 2.76 0 002.42 7.19 28.89 28.89 0 002 12a28.89 28.89 0 00.42 4.81 2.76 2.76 0 001.94 1.95C5.99 19 12 19 12 19s6.01 0 7.64-.24a2.76 2.76 0 001.94-1.95A28.89 28.89 0 0022 12a28.89 28.89 0 00-.42-4.81zM10 15V9l5.2 3L10 15z"/></svg>
             YouTube
           </button>
-        </div>
-      </div>
-      <div class="self-name-block">
-        <div class="name-editor" id="lobby-name-editor">
-          <div class="name-display" data-name-display>
-            <div class="name-avatar" id="lobby-profile-avatar">WT</div>
-            <div class="name-copy">
-              <span class="name-overline">Display Name</span>
-              <strong class="name-value" id="lobby-display-name">Watch Together</strong>
-            </div>
-            <button class="icon-ghost-btn" id="lobby-name-edit-btn" type="button" aria-label="Edit your display name">
-              <span class="material-symbols-outlined">edit</span>
-            </button>
-          </div>
-          <div class="name-edit-row" data-name-edit-row hidden>
-            <input class="name-input-inline" id="lobby-name-input" maxlength="32" type="text" autocomplete="off" spellcheck="false"/>
-            <button class="btn-inline btn-inline--primary" id="lobby-name-save-btn" type="button">Save</button>
-            <button class="btn-inline btn-inline--ghost" id="lobby-name-cancel-btn" type="button">Cancel</button>
-          </div>
         </div>
       </div>
       <!-- Local file panel (default) -->
