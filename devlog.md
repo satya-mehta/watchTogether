@@ -318,6 +318,73 @@ A daily record of bugs found, root causes, and fixes applied.
 - `startInactivityTimer()` now bails out when playback is paused or the user is actively interacting, and its timeout callback clears the stored handle before calling `hideControls()`.
 - Added `pointerdown` on the control bar plus document-level `pointerup` / `pointercancel` so the 3-second timer restarts only after the user actually finishes interacting.
 
+---
+
+## Day 8 — WebRTC Hardening, ICE/TURN Overhaul & Overlay Interaction (March 23, 2026)
+
+**Focus:** Study real-world WebRTC projects to reduce call drops and connection failures, replace the broken TURN configuration with working servers, improve ICE candidate pre-gathering, add connection-type logging, fix the PiP drag/resize conflict, and make the overlay smart enough to step aside when chat opens.
+
+### WebRTC & ICE improvements (`frontend/src/webrtc.js`)
+
+**Replaced non-functional Metered TURN placeholders with OpenRelay**
+- Problem: `ICE_SERVERS` contained four entries pointing to `YOUR_METERED_USERNAME.relay.metered.ca` with literal placeholder strings as credentials. The app was behaving as a STUN-only system — any peer pair behind symmetric NAT, CGNAT (common on Indian mobile carriers), or corporate firewalls simply could not connect.
+- Fix: Replaced all placeholder entries with `openrelay.metered.ca` using the public `openrelayproject` credentials. Four transport entries cover every network path: UDP:80 (primary), UDP:443 (fallback), TCP:443 (when UDP is blocked), and `turns:` TLS:443 (last resort — indistinguishable from HTTPS, passes through the strictest firewalls).
+
+**Added `iceTransportPolicy: 'all'` explicitly**
+- This is the browser default but is now written explicitly so the config intent is visible. It also prevents an accidental `'relay'`-only config from slipping in during debugging and never being reverted.
+
+**Added `iceCandidatePoolSize: 10`**
+- The browser now pre-gathers ICE candidates (including TURN relay allocations) in the background before the call even starts. By the time the peer clicks ready, all STUN and TURN addresses are already allocated, removing the 1–3 second visible gathering delay from call setup time.
+
+**Added per-candidate type logging in `onicecandidate`**
+- Each gathered candidate is now logged with a clear label: `🏠 host (local)`, `🌐 srflx (STUN)`, or `🔄 relay (TURN)`. The null candidate (gathering complete) also logs. This makes it immediately visible in DevTools whether TURN allocation is working without needing to read raw SDP.
+
+**Added `_logSelectedCandidatePair()` — actual connection-type logging**
+- Called once ICE reaches `connected` or `completed`. Reads `getStats()`, finds the nominated candidate pair, resolves the local/remote candidate types, and logs:
+  - `✅ Connected via: srflx ↔ srflx | udp | RTT 42ms — ⚡ Direct P2P (no relay)`
+  - `✅ Connected via: relay ↔ srflx | udp | RTT 180ms — 🔄 TURN relay active`
+- Previously it was impossible to tell whether TURN was carrying actual media (as opposed to just being allocated as a fallback option). This log answers that definitively.
+- Also emits a warning when relay is active: `⚠️ TURN is carrying media. Call quality depends on relay bandwidth.`
+
+### PiP overlay: drag vs resize conflict fix (`frontend/index.html`)
+
+**Problem:** The entire bubble was one drag target using `mousedown/mousemove/mouseup`. Any click anywhere on the overlay — including near the resize corner handles — started a drag. Resize and drag gestures fired simultaneously and interfered. There was no touch/pointer event support; the whole system was mouse-only and broke completely on mobile.
+
+**Fix — switched entirely to Pointer Events:**
+- Replaced all `mousedown/mousemove/mouseup` listeners with `pointerdown/pointermove/pointerup/pointercancel`. Pointer Events fire for mouse, touch, and stylus uniformly — no separate touch handler needed.
+- `setPointerCapture()` on the active element ensures the gesture is tracked even if the pointer leaves the element during fast movement.
+- `touch-action:none` set inline on the element during active gestures to suppress browser scroll interference on mobile.
+
+**Fix — center-zone drag guard (`isInDragZone`):**
+- Before drag begins, the pointer position is expressed as a fraction (0–1) of the bubble's width and height.
+- If the pointer lands in the outer 20% band on any edge, drag is blocked. Only the inner 60×60% area initiates a drag.
+- This means touching near a corner handle never accidentally starts dragging the bubble.
+
+**Fix — per-handle resize isolation:**
+- Each `.pip-resize-handle` corner gets its own `pointerdown/pointermove/pointerup/pointercancel` listener.
+- The handle calls `stopPropagation()` on `pointerdown`, so the bubble's drag listener never sees the event.
+- `pointercancel` handlers on both drag and resize clean up state so stuck cursors can't occur on mobile after an interrupted gesture.
+
+### PiP overlay: smart chat-panel collision detection (`frontend/index.html`)
+
+**Problem:** The PiP bubble is `position:fixed` and doesn't participate in the CSS layout shift that happens when chat opens. When the chat panel slides in from the right, the bubble could be entirely hidden behind it with no way to get it back except dragging blind.
+
+**Fix — `MutationObserver` on `#screen-watch`:**
+- Watches for the `.chat-open` class being added or removed.
+- On add → calls `onChatOpen()`. On remove → calls `onChatClose()`.
+
+**`onChatOpen()` logic:**
+1. Converts any `right:`-based position to explicit `left/top` pixels (necessary because the bubble starts with `right:20px` from CSS before the user has ever dragged it).
+2. Computes the chat panel's left edge using the same `clamp(240px, 25vw, 340px)` formula from the CSS — no hardcoded values.
+3. If the bubble's right edge is already clear of the chat panel, does nothing.
+4. Saves `pipPreChatLeft` and `pipPreChatTop` for restore later.
+5. Enables a `0.3s cubic-bezier` transition on the element's `left` and `top` properties, shifts the bubble to just left of the panel with a 12px gap, then removes the transition via `transitionend` so subsequent dragging stays instant with no lag.
+
+**`onChatClose()` logic:**
+- Restores from saved coordinates with the same smooth transition, then cleans up state.
+- If the user manually dragged the bubble after chat opened, `pipPreChatLeft` still holds the pre-chat position and restores to that, not the dragged position. This is intentional — the bubble returns to where it was before the disruption makes it smooth.
+
+---
 
 ## Notes & Known Limitations
 
