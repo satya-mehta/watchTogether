@@ -2226,7 +2226,7 @@ function wireClientEvents() {
     // player init; that second call was causing a race where the player briefly
     // reports a different duration before settling, producing a false mismatch.
     if (ytDuration > 0) {
-      client?.fileReady(ytDuration, title || videoId);
+      client?.fileReady(ytDuration, title || videoId, true);    // hasvideo = true for yt video
     }
 
     // Kick off background player init so it's warm when the watch screen opens.
@@ -3441,7 +3441,7 @@ async function processYtUrl(videoId, { broadcast = true } = {}) {
     // from the server which enables the ready button when both sides match.
     // Calling resetReadyState after fileReady was disabling the button AFTER
     // the server had just enabled it, leaving users stuck unable to mark ready.
-    client?.fileReady(ytDuration, info.title || videoId);
+    client?.fileReady(ytDuration, info.title || videoId, true); // has video = true for the youtube video
   } catch (err) {
     console.error('[YT] processYtUrl failed:', err);
     loadEl?.classList.remove('show');

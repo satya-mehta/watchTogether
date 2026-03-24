@@ -161,8 +161,8 @@ class WatchTogetherClient extends EventTarget {
     this._send('update_name', { name });
   }
 
-  fileReady(durationSec, fileName = null) {
-    this._send('file_ready', { durationSec, fileName });
+  fileReady(durationSec, fileName = null, hasVideo = false) {
+    this._send('file_ready', { durationSec, fileName, hasVideo });
   }
 
   setReady(isReady) {
