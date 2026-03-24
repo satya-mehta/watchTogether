@@ -229,30 +229,67 @@ function handleConnection(ws, req, roomManager) {
 
     // ── FILE_READY ────────────────────────────────────────────────────────
     if (type === 'file_ready') {
-      const peer = myRoom.peers.get(myPeerId);
-      peer.fileDuration = msg.durationSec;
-      peer.fileName = msg.fileName || null;
+  const peer = myRoom.peers.get(myPeerId);
 
-      broadcast(myRoom, 'peer_file_ready', {
-        peerId:      myPeerId,
-        durationSec: msg.durationSec,
-        fileName:    msg.fileName || null,
-      }, myPeerId);
+  // 1. Store incoming data
+  peer.fileDuration = msg.durationSec ?? 0;
+  peer.fileName     = msg.fileName || null;
+  peer.hasVideo     = msg.hasVideo || false; // ✅ NEW
 
-      const allPeers = [...myRoom.peers.values()];
-      if (allPeers.length === 2 && allPeers.every(p => p.fileDuration !== null)) {
-        const [a, b] = allPeers;
-        const diff = Math.abs(a.fileDuration - b.fileDuration);
-        const match = diff <= DURATION_MATCH_TOLERANCE_SEC;
+  // 2. Inform the other peer
+  broadcast(myRoom, 'peer_file_ready', {
+    peerId:      myPeerId,
+    durationSec: peer.fileDuration,
+    fileName:    peer.fileName,
+  }, myPeerId);
+
+  const allPeers = [...myRoom.peers.values()];
+
+  if (allPeers.length === 2) {
+    const [a, b] = allPeers;
+
+    // 🔴 YOUTUBE MODE (decoupled)
+    if (myRoom.youtubeVideoId) {
+      if (a.hasVideo && b.hasVideo && !myRoom.readyBroadcasted) {
+        myRoom.readyBroadcasted = true; // ✅ prevent duplicate triggers
+
         broadcast(myRoom, 'duration_check', {
-          match,
-          diff,
-          durations: { [a.peerId]: a.fileDuration, [b.peerId]: b.fileDuration },
+          match: true,
+          diff: 0,
+          durations: {
+            [a.peerId]: a.fileDuration,
+            [b.peerId]: b.fileDuration,
+          },
         });
-        console.log(`[Sync] ${myRoom.code} duration check: ${match ? '✓ match' : `✗ drift ${diff}s`}`);
+
+        console.log(`[Sync] ${myRoom.code} YouTube acknowledged by both`);
       }
-      return;
     }
+
+    // 🟢 LOCAL FILE MODE (keep strict check)
+    else if (a.fileDuration !== null && b.fileDuration !== null) {
+      const diff  = Math.abs(a.fileDuration - b.fileDuration);
+      const match = diff <= DURATION_MATCH_TOLERANCE_SEC;
+
+      broadcast(myRoom, 'duration_check', {
+        match,
+        diff,
+        durations: {
+          [a.peerId]: a.fileDuration,
+          [b.peerId]: b.fileDuration,
+        },
+      });
+
+      console.log(
+        `[Sync] ${myRoom.code} duration check: ${
+          match ? '✓ match' : `✗ drift ${diff}s`
+        }`
+      );
+    }
+  }
+
+  return;
+}
 
     // ── READY_TOGGLE ──────────────────────────────────────────────────────
     if (type === 'ready_toggle') {
@@ -507,24 +544,71 @@ function handleConnection(ws, req, roomManager) {
       return;
     }
 
+    //--update duration------
+    if (type === 'update_duration') {
+  const peer = myRoom.peers.get(myPeerId);
+  if (!peer) return;
+
+  peer.fileDuration = msg.durationSec ?? 0;
+
+  const allPeers = [...myRoom.peers.values()];
+
+  // 🔍 Soft validation (YouTube only)
+  if (myRoom.youtubeVideoId && allPeers.length === 2) {
+    const [a, b] = allPeers;
+
+    if (a.fileDuration > 0 && b.fileDuration > 0) {
+      const diff = Math.abs(a.fileDuration - b.fileDuration);
+
+      if (diff > 2) {
+        console.warn(
+          `[Sync Warning] Room ${myRoom.code}: Possible YouTube desync (${diff}s)`
+        );
+      }
+    }
+  }
+
+  // 📡 Notify peer
+  broadcast(myRoom, 'peer_duration_updated', {
+    peerId: myPeerId,
+    durationSec: peer.fileDuration
+  }, myPeerId);
+
+  return;
+}
+
     // ── YOUTUBE_LINK ──────────────────────────────────────────────────────
     // Either peer can paste the link; server stores it and fans it out so
     // BOTH clients receive peer_youtube_link and load the same video.
-    if (type === 'youtube_link') {
-      const peer = myRoom.peers.get(myPeerId);
-      myRoom.youtubeVideoId = msg.videoId || null;
-      myRoom.youtubeTitle   = msg.title   || null;
-      myRoom.peers.forEach(p => { p.isReady = false; p.fileDuration = null; });
-      nudgeCooldownUntil = 0;
-      broadcast(myRoom, 'peer_youtube_link', {
-        fromPeerId: myPeerId,
-        videoId:    msg.videoId,
-        title:      msg.title    || null,
-        duration:   msg.duration || null, // pass through so receiver skips initYtPlayer
-      });
-      console.log(`[YouTube] ${myRoom.code} link: ${msg.videoId} by ${peer?.name}`);
-      return;
+  if (type === 'youtube_link') {
+    const peer = myRoom.peers.get(myPeerId);
+
+    // 1. Store new video
+    myRoom.youtubeVideoId = msg.videoId || null;
+    myRoom.youtubeTitle   = msg.title   || null;
+
+    // 2. 🔥 RESET ROOM STATE (important)
+    myRoom.readyBroadcasted = false;
+
+    for (const p of myRoom.peers.values()) {
+      p.isReady = false;
+      p.hasVideo = false;        // ✅ new
+      p.fileDuration = 0;        // ✅ reset safely
     }
+
+    nudgeCooldownUntil = 0;
+
+  // 3. Broadcast to peers
+    broadcast(myRoom, 'peer_youtube_link', {
+      fromPeerId: myPeerId,
+      videoId:    msg.videoId,
+      title:      msg.title || null,
+      duration:   msg.duration || null,
+    });
+
+    console.log(`[YouTube] ${myRoom.code} link: ${msg.videoId} by ${peer?.name}`);
+    return;
+  }
 
     if (type === 'camera_toggle' || type === 'mic_toggle' || type === 'sync_media_state') {
       const peer = myRoom.peers.get(myPeerId);

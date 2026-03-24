@@ -7,6 +7,7 @@ import {
   persistDisplayName,
   sanitizeDisplayName,
 } from './profile.js';
+import { start } from 'node:repl';
 
 // ── Config ────────────────────────────────────────────────────────────────
 const APP_CONFIG = window.WATCH_TOGETHER_CONFIG ?? {};
@@ -253,6 +254,7 @@ let ytPlayer        = null;     // YT.Player instance
 let ytApiReady      = false;
 let ytPlayerReady   = false;
 let ytCurrentTime   = 0;
+let activeVideoId = null; // for fixing rejoin architecture
 let ytDuration      = 0;
 let ytIsPaused      = true;
 let ytPollingTimer  = null;
@@ -3071,6 +3073,7 @@ async function _doInitYtPlayer(videoId) {
 
   // Reuse path: player exists, is ready, and its methods are real
   if (ytPlayer && ytPlayerReady && typeof ytPlayer.cueVideoById === 'function') {
+    stopYtPolling();
     ytPlayer.cueVideoById({ videoId }); // cue first so onError fires before play
     ytVideoId     = videoId;
     ytCurrentTime = 0;
@@ -3086,6 +3089,8 @@ async function _doInitYtPlayer(videoId) {
       }, 200);
     });
     if (ytVideoId === null) throw new Error('Video has embedding disabled or is unavailable.');
+    activeVideoId = videoId;
+    startYtPolling(videoId);
     return;
   }
 
@@ -3124,7 +3129,8 @@ async function _doInitYtPlayer(videoId) {
           ytPlayerReady = true;
           ytVideoId     = videoId;
           ytDuration    = typeof e.target.getDuration === 'function' ? e.target.getDuration() : 0;
-          startYtPolling();
+          activeVideoId = videoId;
+          startYtPolling(videoId);
           resolve();
         },
         onStateChange(e) { onYtStateChange(e.data); },
@@ -3181,17 +3187,33 @@ function onYtStateChange(state) {
   }
 }
 
-function startYtPolling() {
+
+function startYtPolling(videoId = null) {
   stopYtPolling();
+
+  if (videoId) activeVideoId = videoId; // only update if provided
+
   ytPollingTimer = setInterval(() => {
     if (!ytPlayer || !ytPlayerReady) return;
+
     const t = ytPlayer.getCurrentTime?.() ?? 0;
     const d = ytPlayer.getDuration?.() ?? 0;
+
     ytCurrentTime = t;
-    if (d > 0) ytDuration = d;
+
+    // ✅ prevent stale updates
+    if (d > 0 && ytDuration === 0 && (!videoId || activeVideoId === videoId)) {
+      ytDuration = d;
+      client?.updateDuration(d); // 🔥 important
+    } 
+    else if (d > 0 && (!videoId || activeVideoId === videoId)) {
+      ytDuration = d;
+    }
+
     window.ytTimeUpdate?.(t, d || ytDuration);
   }, 250);
 }
+
 
 function stopYtPolling() {
   if (ytPollingTimer) { clearInterval(ytPollingTimer); ytPollingTimer = null; }
