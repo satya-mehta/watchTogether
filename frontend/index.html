@@ -6,6 +6,20 @@
 <title>Watch Together</title>
 <link href="https://fonts.googleapis.com/css2?family=Nunito:wght@400;600;700&family=Space+Grotesk:wght@400;500&display=swap" rel="stylesheet"/>
 <link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined" rel="stylesheet">
+<!-- Basic favicon -->
+<link rel="icon" type="image/x-icon" href="assets/favicon.ico">
+
+<!-- PNG favicons -->
+<link rel="icon" type="image/png" sizes="16x16" href="assets/favicon-16x16.png">
+<link rel="icon" type="image/png" sizes="32x32" href="assets/favicon-32x32.png">
+
+<!-- Apple -->
+<link rel="apple-touch-icon" href="assets/apple-touch-icon.png">
+
+<!-- Manifest -->
+<link rel="manifest" href="assets/site.webmanifest">
+
+<meta name="theme-color" content="#8b5cf6">
 <style>
   .material-symbols-outlined {
   font-variation-settings:
@@ -186,7 +200,7 @@ body{font-family:'Nunito',sans-serif;background:var(--bg);color:var(--text);min-
 /* ── Watch ──────────────────────────────────────────────────────────────── */
 #screen-watch{
   padding:0;
-  background:#000;
+  background:radial-gradient(circle at top, rgba(24,30,44,.96), #04060b 72%);
   position:relative;
   overflow:hidden;
   min-height:100vh;
@@ -205,51 +219,73 @@ body{font-family:'Nunito',sans-serif;background:var(--bg);color:var(--text);min-
   --watch-video-block-end:var(--chat-panel-height);
 }
 
-/* Shared video surfaces */
-.video-container{
-  position:relative;
-  width:100%;
-  height:100%;
-  overflow:hidden;
-  background:#000;
-}
-.video-surface{
-  display:block;
-  width:100%;
-  height:100%;
-  object-fit:contain;
-  background:#000;
-}
-
-/* Hidden actual movie video */
-#movie-video{
+#player-shell{
   position:absolute;
   top:0;
   left:0;
   right:var(--watch-video-inline-end);
   bottom:var(--watch-video-block-end);
   z-index:1;
+  display:flex;
+  align-items:center;
+  justify-content:center;
   transition:right .25s ease, bottom .25s ease;
+}
+#player-stage{
+  position:relative;
+  width:100%;
+  height:100%;
+  max-width:100%;
+  max-height:100%;
+  display:flex;
+  align-items:center;
+  justify-content:center;
+  overflow:hidden;
+  background:#000;
+  transition:width .25s ease, height .25s ease;
+}
+
+/* Shared video surfaces */
+.video-container{
+  position:relative;
+  width:100%;
+  height:100%;
+  display:flex;
+  align-items:center;
+  justify-content:center;
+  overflow:hidden;
+  background:#000;
+}
+.video-surface{
+  display:block;
+  width:auto;
+  height:auto;
+  max-width:100%;
+  max-height:100%;
+  object-fit:contain;
+  background:#000;
+}
+
+/* Hidden actual movie video */
+#movie-video{
+  position:relative;
+  z-index:1;
 }
 
 /* Overlays */
 .watch-overlay{position:absolute;inset:0;z-index:2;pointer-events:none;}
 #player-hover-layer{
   position:absolute;
-  top:0;
-  left:0;
-  right:var(--watch-video-inline-end);
-  bottom:var(--watch-video-block-end);
+  inset:0;
   z-index:3;
   background:transparent;
   pointer-events:none;
-  transition:right .25s ease, bottom .25s ease;
 }
 #player-hover-layer.active{pointer-events:auto;}
 
 /* PiP bubble — friend's face */
 .pip-bubble{
-  position:fixed;top:20px;right:20px;z-index:20;
+  position:absolute;top:0;left:0;z-index:20;
   width:164px;height:122px;border-radius:18px;
   border:1.5px solid rgba(184,169,217,.3);
   min-width:150px;min-height:112px;
@@ -258,12 +294,17 @@ body{font-family:'Nunito',sans-serif;background:var(--bg);color:var(--text);min-
   box-shadow:0 4px 24px rgba(0,0,0,.5);
   pointer-events:all;
   background:#000;
+  transform:translate3d(0,0,0);
+  will-change:transform,width,height;
+  touch-action:none;
+  transition:transform .28s cubic-bezier(.4,0,.2,1),width .18s ease,height .18s ease,box-shadow .2s ease;
 }
 .pip-resize-handle{
   position:absolute;
   width:18px;
   height:18px;
   z-index:3;
+  display:none;
   background:transparent;
   border:none;
   box-shadow:none;
@@ -272,7 +313,26 @@ body{font-family:'Nunito',sans-serif;background:var(--bg);color:var(--text);min-
 .pip-resize-handle.nw{top:0;left:0;cursor:nwse-resize;}
 .pip-resize-handle.ne{top:0;right:0;cursor:nesw-resize;}
 .pip-resize-handle.sw{bottom:0;left:0;cursor:nesw-resize;}
-.pip-resize-handle.se{bottom:0;right:0;cursor:nwse-resize;}
+.pip-resize-handle.se{
+  display:block;
+  bottom:0;
+  right:0;
+  width:24px;
+  height:24px;
+  cursor:nwse-resize;
+  opacity:.92;
+}
+.pip-resize-handle.se::before{
+  content:'';
+  position:absolute;
+  right:5px;
+  bottom:5px;
+  width:9px;
+  height:9px;
+  border-right:2px solid rgba(255,255,255,.55);
+  border-bottom:2px solid rgba(255,255,255,.55);
+  border-radius:0 0 8px 0;
+}
 .pip-remote-stage{
   position:absolute;
   inset:0;
@@ -288,9 +348,14 @@ body{font-family:'Nunito',sans-serif;background:var(--bg);color:var(--text);min-
 .pip-live-dot{width:6px;height:6px;border-radius:50%;background:#EC4899;animation:bl 1.5s ease infinite;box-shadow:0 0 6px #EC4899;}
 @keyframes bl{0%,100%{opacity:1}50%{opacity:.3}}
 .pip-live-txt{font-size:9px;letter-spacing:1px;color:rgba(255,255,255,.5);text-transform:uppercase;font-weight:600;}
-.pip-name-chip{position:absolute;left:8px;top:26px;z-index:5;max-width:calc(100% - 54px);padding:3px 8px;border-radius:999px;background:rgba(0,0,0,.44);font-size:9px;font-weight:700;letter-spacing:.4px;color:#fff;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;pointer-events:none;}
-.pip-mic-badge{position:absolute;right:10px;bottom:58px;z-index:5;width:24px;height:24px;border-radius:50%;display:flex;align-items:center;justify-content:center;background:rgba(244,63,94,.86);color:#fff;box-shadow:0 8px 18px rgba(0,0,0,.28);pointer-events:none;}
+.pip-name-chip,
+.pip-mic-badge,
+.pip-quality-badge{z-index:5;pointer-events:none;}
+.pip-name-chip{position:absolute;left:8px;bottom:8px;max-width:calc(100% - 76px);padding:3px 8px;border-radius:999px;background:rgba(0,0,0,.44);font-size:9px;font-weight:700;letter-spacing:.4px;color:#fff;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+.pip-mic-badge{position:absolute;right:8px;bottom:8px;width:24px;height:24px;border-radius:50%;display:flex;align-items:center;justify-content:center;background:rgba(244,63,94,.86);color:#fff;box-shadow:0 8px 18px rgba(0,0,0,.28);opacity:0;transform:translateY(2px);transition:opacity .2s ease, transform .2s ease;}
+.pip-mic-badge.active{opacity:1;transform:translateY(0);}
 .pip-mic-badge .material-symbols-outlined{font-size:14px;line-height:1;}
+.pip-quality-badge{position:absolute;left:8px;bottom:38px;font-size:9px;font-weight:700;letter-spacing:.6px;text-transform:uppercase;padding:2px 7px;border-radius:8px;display:none;background:rgba(0,0,0,.6);color:#fbbf24;}
 
 /* Self-view (tiny, bottom-left of PiP) */
 .pip-local-stage{
@@ -311,7 +376,7 @@ body{font-family:'Nunito',sans-serif;background:var(--bg);color:var(--text);min-
 /* Reactions sidebar */
 .reactions{
   position:absolute;
-  right:calc(var(--watch-video-inline-end) + var(--watch-chat-gap));
+  right:var(--watch-chat-gap);
   top:50%;
   transform:translateY(-50%);
   z-index:10;
@@ -319,13 +384,34 @@ body{font-family:'Nunito',sans-serif;background:var(--bg);color:var(--text);min-
   flex-direction:column;
   gap:8px;
   pointer-events:all;
-  transition:right .25s ease, top .25s ease, transform .25s ease;
+  transition:top .25s ease, transform .25s ease;
+  scrollbar-width:none;
+  -ms-overflow-style:none;
 }
+.reactions::-webkit-scrollbar{display:none;}
 .react-btn{width:40px;height:40px;border-radius:12px;background:rgba(99,102,241,.08);border:1px solid rgba(99,102,241,.25);display:flex;align-items:center;justify-content:center;font-size:18px;cursor:pointer;transition:transform .15s,background .2s,border-color .2s;}
 .react-btn:hover{transform:scale(1.25) rotate(-5deg);background:rgba(99,102,241,.15);border-color:rgba(99,102,241,.4);}
 #screen-watch[data-chat-layout="stack"] .reactions{
   top:20px;
   transform:none;
+}
+@media (orientation: landscape) and (max-width: 960px){
+  .reactions{
+    top:auto;
+    bottom:calc(132px + env(safe-area-inset-bottom, 0px));
+    left:14px;
+    right:14px;
+    transform:none;
+    flex-direction:row;
+    align-items:center;
+    justify-content:flex-start;
+    gap:8px;
+    max-width:none;
+    overflow-x:auto;
+    overflow-y:hidden;
+    padding:6px 2px;
+  }
+  .react-btn{flex:0 0 auto;}
 }
 
 /* Sync toast — fixed top-centre so it sits above everything on all screens */
@@ -375,13 +461,14 @@ body{font-family:'Nunito',sans-serif;background:var(--bg);color:var(--text);min-
 
 .ctrl-bar{
   position:absolute;
-  bottom:var(--watch-video-block-end);
+  bottom:0;
   left:0;
-  right:var(--watch-video-inline-end);
+  width:100%;
+  box-sizing:border-box;
   z-index:15;
   padding:0 clamp(14px,2vw,20px) calc(18px + env(safe-area-inset-bottom, 0px));
   background:linear-gradient(to top,rgba(0,0,0,.9),transparent);
-  transition:opacity .25s ease, transform .25s ease, right .25s ease, bottom .25s ease;
+  transition:opacity .25s ease, transform .25s ease;
   pointer-events:all;
   will-change:opacity,transform;
   overflow:hidden;
@@ -626,15 +713,11 @@ input[type=range]#seek-bar::-webkit-slider-thumb{appearance:none;width:14px;heig
 /* ── YouTube IFrame player (watch screen) ────────────────────────────────── */
 #yt-player-wrap{
   position:absolute;
-  top:0;
-  left:0;
-  right:var(--watch-video-inline-end);
-  bottom:var(--watch-video-block-end);
+  inset:0;
   z-index:1;
   background:#000;
   display:none;
   pointer-events:all;
-  transition:right .25s ease, bottom .25s ease;
 }
 #yt-player-wrap.active{display:block;}
 #yt-player{width:100%;height:100%;}
@@ -1158,122 +1241,127 @@ input[type=range]#seek-bar::-webkit-slider-thumb{appearance:none;width:14px;heig
 
   <button class="watch-back" id="watch-back-btn" type="button">← Change file</button>
 
-  <!-- Actual movie -->
-  <!-- controlsList and disablePictureInPicture block browser-native transport
-       controls (Safari fullscreen overlay, AirPlay, PiP) so all play/pause
-       goes through our own button, which has proper sync logic. -->
-  <video id="movie-video" class="video-surface" preload="metadata"
-    controlsList="nodownload nofullscreen noremoteplayback"
-    disablepictureinpicture
-    disableremoteplayback></video>
-  <!-- YouTube player (active in youtube mode) -->
-  <div id="yt-player-wrap">
-    <div id="yt-player"></div>
-  </div>
-  <div id="player-hover-layer" aria-hidden="true"></div>
+  <div id="player-shell">
+    <div id="player-stage">
+      <!-- Actual movie -->
+      <!-- controlsList and disablePictureInPicture block browser-native transport
+           controls (Safari fullscreen overlay, AirPlay, PiP) so all play/pause
+           goes through our own button, which has proper sync logic. -->
+      <video id="movie-video" class="video-surface" preload="metadata"
+        controlsList="nodownload nofullscreen noremoteplayback"
+        disablepictureinpicture
+        disableremoteplayback></video>
+      <!-- YouTube player (active in youtube mode) -->
+      <div id="yt-player-wrap">
+        <div id="yt-player"></div>
+      </div>
+      <div id="player-hover-layer" aria-hidden="true"></div>
 
-  <!-- Master badge -->
-  <div class="master-badge" id="master-badge">You · controlling</div>
-
-  <!-- Reactions -->
-  <div class="reactions">
-    <button class="react-btn" data-reaction="❤️">❤️</button>
-    <button class="react-btn" data-reaction="😂">😂</button>
-    <button class="react-btn" data-reaction="😱">😱</button>
-    <button class="react-btn" data-reaction="👏">👏</button>
-    <button class="react-btn" data-reaction="🤩">🤩</button>
-    <button class="react-btn" data-reaction="🌚">🌚</button>
-  </div>
-
-  <!-- Player controls -->
-  <div class="ctrl-bar" id="ctrl-bar">
-    <input type="range" id="seek-bar" min="0" value="0" step="0.1" style="width:100%;margin-bottom:8px;"/>
-    <div class="time-row">
-      <span class="time-txt" id="time-current">0:00:00</span>
-      <span class="time-txt" id="time-total">0:00:00</span>
-    </div>
-    <div class="ctrl-row">
-      <div class="ctrl-cluster ctrl-cluster--transport">
-        <button class="cb" id="skip-back-btn" title="-10s">
-          <span class="material-symbols-outlined">
-            keyboard_double_arrow_left
-          </span>
-        </button>
-        <button class="cb pp" id="play-pause-btn">
-          <svg id="pp-icon" width="22" height="22" viewBox="0 0 24 24" fill="currentColor"><path d="M8 5v14l11-7z"/></svg>
-        </button>
-        <button class="cb" id="skip-fwd-btn" title="+10s">
-          <span class="material-symbols-outlined">
-            keyboard_double_arrow_right
-          </span>
-        </button>
-        <div class="ctrl-volume">
-          <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor" style="color:rgba(255,255,255,.35)"><path d="M3 9v6h4l5 5V4L7 9H3zm13.5 3c0-1.77-1.02-3.29-2.5-4.03v8.05c1.48-.73 2.5-2.25 2.5-4.02z"/></svg>
-          <input class="vol-sl" type="range" id="volume-slider" min="0" max="1" step="0.05" value="0.8"/>
+      <!-- Player controls -->
+      <div class="ctrl-bar" id="ctrl-bar">
+        <input type="range" id="seek-bar" min="0" value="0" step="0.1" style="width:100%;margin-bottom:8px;"/>
+        <div class="time-row">
+          <span class="time-txt" id="time-current">0:00:00</span>
+          <span class="time-txt" id="time-total">0:00:00</span>
+        </div>
+        <div class="ctrl-row">
+          <div class="ctrl-cluster ctrl-cluster--transport">
+            <button class="cb" id="skip-back-btn" title="-10s">
+              <span class="material-symbols-outlined">
+                keyboard_double_arrow_left
+              </span>
+            </button>
+            <button class="cb pp" id="play-pause-btn">
+              <svg id="pp-icon" width="22" height="22" viewBox="0 0 24 24" fill="currentColor"><path d="M8 5v14l11-7z"/></svg>
+            </button>
+            <button class="cb" id="skip-fwd-btn" title="+10s">
+              <span class="material-symbols-outlined">
+                keyboard_double_arrow_right
+              </span>
+            </button>
+            <div class="ctrl-volume">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor" style="color:rgba(255,255,255,.35)"><path d="M3 9v6h4l5 5V4L7 9H3zm13.5 3c0-1.77-1.02-3.29-2.5-4.03v8.05c1.48-.73 2.5-2.25 2.5-4.02z"/></svg>
+              <input class="vol-sl" type="range" id="volume-slider" min="0" max="1" step="0.05" value="0.8"/>
+            </div>
+          </div>
+          <div class="ctrl-cluster ctrl-cluster--meta">
+            <div class="sync-chip"><div class="chip-dot ok"></div><span id="sync-chip-label">synced</span></div>
+            <button class="cb" id="fullscreen-btn">
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor"><path d="M7 14H5v5h5v-2H7v-3zm-2-4h2V7h3V5H5v5zm12 7h-3v2h5v-5h-2v3zM14 5v2h3v3h2V5h-5z"/></svg>
+            </button>
+          </div>
+        </div>
+        <div class="track-row">
+          <label class="track-field" for="captions-select">
+            <span class="track-label">Captions</span>
+            <select class="track-select" id="captions-select" aria-label="Caption track" disabled>
+              <option value="">Load a movie first</option>
+            </select>
+            <span class="track-help" id="captions-help" data-tone="info">Load a movie, or add your own .srt/.vtt in the lobby.</span>
+          </label>
+          <label class="track-field" for="audio-track-select">
+            <span class="track-label">Audio</span>
+            <select class="track-select" id="audio-track-select" aria-label="Audio language" disabled>
+              <option value="">Load a movie first</option>
+            </select>
+            <span class="track-help" id="audio-track-help" data-tone="info">Audio choice stays local to you. Browser support varies for embedded tracks.</span>
+          </label>
         </div>
       </div>
-      <div class="ctrl-cluster ctrl-cluster--meta">
-        <div class="sync-chip"><div class="chip-dot ok"></div><span id="sync-chip-label">synced</span></div>
-        <button class="cb" id="fullscreen-btn">
-          <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor"><path d="M7 14H5v5h5v-2H7v-3zm-2-4h2V7h3V5H5v5zm12 7h-3v2h5v-5h-2v3zM14 5v2h3v3h2V5h-5z"/></svg>
+    </div>
+
+    <!-- Master badge -->
+    <div class="master-badge" id="master-badge">You · controlling</div>
+
+    <!-- Reactions -->
+    <div class="reactions">
+      <button class="react-btn" data-reaction="❤️">❤️</button>
+      <button class="react-btn" data-reaction="😂">😂</button>
+      <button class="react-btn" data-reaction="😱">😱</button>
+      <button class="react-btn" data-reaction="👏">👏</button>
+      <button class="react-btn" data-reaction="🤩">🤩</button>
+      <button class="react-btn" data-reaction="🌚">🌚</button>
+    </div>
+
+    <!-- Shared call UI -->
+    <div class="pip-bubble" id="pip-bubble" style="display:none;" aria-label="Video call overlay">
+      <div class="pip-resize-handle nw" data-resize="nw"></div>
+      <div class="pip-resize-handle ne" data-resize="ne"></div>
+      <div class="pip-resize-handle sw" data-resize="sw"></div>
+      <div class="pip-resize-handle se" data-resize="se"></div>
+      <div class="pip-live">
+        <div class="pip-live-dot"></div>
+        <span class="pip-live-txt">Live</span>
+      </div>
+      <div class="pip-name-chip" id="remote-name-chip">Your friend</div>
+      <div class="pip-mic-badge" id="remote-mic-badge" aria-hidden="true">
+        <span class="material-symbols-outlined">mic_off</span>
+      </div>
+      <div class="pip-quality-badge" id="pip-quality-badge">📶 Low quality</div>
+      <div class="pip-remote-stage video-container" id="pip-remote-stage">
+        <video id="remote-video" class="video-surface" autoplay playsinline></video>
+        <!-- Shown when the remote peer has turned their camera off -->
+        <div id="remote-cam-off" style="display:none;position:absolute;inset:0;z-index:4;background:#1c1828;display:none;flex-direction:column;align-items:center;justify-content:center;gap:8px;border-radius:inherit;">
+          <div class="name-avatar" id="remote-cam-off-avatar" style="width:50px;height:50px;border-radius:18px;">FR</div>
+          <span id="remote-cam-off-name" style="font-size:12px;font-weight:700;color:rgba(245,247,250,.88);">Your friend</span>
+          <span style="font-size:10px;letter-spacing:1.5px;text-transform:uppercase;color:rgba(184,169,217,0.4);font-weight:600;">Camera off</span>
+        </div>
+      </div>
+      <div class="pip-local-stage video-container" id="pip-local-stage">
+        <video id="local-video" class="video-surface" autoplay playsinline muted></video>
+      </div>
+      <div class="pip-call-controls" id="pip-call-controls" hidden>
+        <button class="call-btn" id="mute-btn" title="Mute microphone" aria-label="Mute microphone">
+          <span class="material-symbols-outlined" id="mute-icon">mic</span>
+        </button>
+        <button class="call-btn" id="camera-btn" title="Hide camera" aria-label="Hide camera">
+          <span class="material-symbols-outlined" id="camera-icon">videocam</span>
+        </button>
+        <button class="call-btn danger" id="end-call-btn" title="End call" aria-label="End call">
+          <span class="material-symbols-outlined">call_end</span>
         </button>
       </div>
     </div>
-    <div class="track-row">
-      <label class="track-field" for="captions-select">
-        <span class="track-label">Captions</span>
-        <select class="track-select" id="captions-select" aria-label="Caption track" disabled>
-          <option value="">Load a movie first</option>
-        </select>
-        <span class="track-help" id="captions-help" data-tone="info">Load a movie, or add your own .srt/.vtt in the lobby.</span>
-      </label>
-      <label class="track-field" for="audio-track-select">
-        <span class="track-label">Audio</span>
-        <select class="track-select" id="audio-track-select" aria-label="Audio language" disabled>
-          <option value="">Load a movie first</option>
-        </select>
-        <span class="track-help" id="audio-track-help" data-tone="info">Audio choice stays local to you. Browser support varies for embedded tracks.</span>
-      </label>
-    </div>
-  </div>
-</div>
-<!-- Shared call UI -->
-<div class="pip-bubble" id="pip-bubble" style="display:none;" aria-label="Video call overlay">
-  <div class="pip-resize-handle nw" data-resize="nw"></div>
-  <div class="pip-resize-handle ne" data-resize="ne"></div>
-  <div class="pip-resize-handle sw" data-resize="sw"></div>
-  <div class="pip-resize-handle se" data-resize="se"></div>
-  <div class="pip-live">
-    <div class="pip-live-dot"></div>
-    <span class="pip-live-txt">Live</span>
-  </div>
-  <div class="pip-name-chip" id="remote-name-chip">Your friend</div>
-  <div class="pip-mic-badge" id="remote-mic-badge" hidden>
-    <span class="material-symbols-outlined">mic_off</span>
-  </div>
-  <div class="pip-quality-badge" id="pip-quality-badge" style="position:absolute;bottom:8px;left:8px;z-index:5;font-size:9px;font-weight:700;letter-spacing:.6px;text-transform:uppercase;padding:2px 7px;border-radius:8px;display:none;background:rgba(0,0,0,.6);pointer-events:none;color:#fbbf24;">📶 Low quality</div>
-  <div class="pip-remote-stage video-container" id="pip-remote-stage">
-    <video id="remote-video" class="video-surface" autoplay playsinline></video>
-    <!-- Shown when the remote peer has turned their camera off -->
-    <div id="remote-cam-off" style="display:none;position:absolute;inset:0;z-index:4;background:#1c1828;display:none;flex-direction:column;align-items:center;justify-content:center;gap:8px;border-radius:inherit;">
-      <div class="name-avatar" id="remote-cam-off-avatar" style="width:50px;height:50px;border-radius:18px;">FR</div>
-      <span id="remote-cam-off-name" style="font-size:12px;font-weight:700;color:rgba(245,247,250,.88);">Your friend</span>
-      <span style="font-size:10px;letter-spacing:1.5px;text-transform:uppercase;color:rgba(184,169,217,0.4);font-weight:600;">Camera off</span>
-    </div>
-  </div>
-  <div class="pip-local-stage video-container" id="pip-local-stage">
-    <video id="local-video" class="video-surface" autoplay playsinline muted></video>
-  </div>
-  <div class="pip-call-controls" id="pip-call-controls" hidden>
-    <button class="call-btn" id="mute-btn" title="Mute microphone" aria-label="Mute microphone">
-      <span class="material-symbols-outlined" id="mute-icon">mic</span>
-    </button>
-    <button class="call-btn" id="camera-btn" title="Hide camera" aria-label="Hide camera">
-      <span class="material-symbols-outlined" id="camera-icon">videocam</span>
-    </button>
-    <button class="call-btn danger" id="end-call-btn" title="End call" aria-label="End call">
-      <span class="material-symbols-outlined">call_end</span>
-    </button>
   </div>
 </div>
 <div class="countdown-overlay" id="countdown-overlay">
@@ -1305,10 +1393,13 @@ input[type=range]#seek-bar::-webkit-slider-thumb{appearance:none;width:14px;heig
   const PAUSE_PATH = '<path d="M6 19h4V5H6v14zm8-14v14h4V5h-4z"/>';
   const urlnow = window.location.origin;
   const watchScreen = document.getElementById('screen-watch');
+  const playerShell = document.getElementById('player-shell');
+  const playerStage = document.getElementById('player-stage');
   const hoverLayer = document.getElementById('player-hover-layer');
   const pipCallControls = document.getElementById('pip-call-controls');
   const pip = document.getElementById('pip-bubble');
   const HOVER_LAYER_RELEASE_DELAY_MS = 140;
+  const DEFAULT_PLAYER_RATIO = 16 / 9;
   let hoverLayerTimer = null;
 
   function updatePlayPauseIcon(playing) {
@@ -1321,7 +1412,70 @@ input[type=range]#seek-bar::-webkit-slider-thumb{appearance:none;width:14px;heig
     const sb = document.getElementById('seek-bar');
     if (sb && mov.duration) sb.style.setProperty('--pct', (mov.currentTime/mov.duration*100)+'%');
   });
-  mov.addEventListener('loadedmetadata', () => { ttot.textContent = fmt(mov.duration); });
+  function applyMainVideoFit(containerWidth, containerHeight, ratio) {
+    if (!mov) return;
+    if (!ratio || !containerWidth || !containerHeight) {
+      mov.style.removeProperty('width');
+      mov.style.removeProperty('height');
+      return;
+    }
+
+    const containerRatio = containerWidth / containerHeight;
+    if (ratio > containerRatio) {
+      mov.style.width = '100%';
+      mov.style.height = 'auto';
+      return;
+    }
+
+    mov.style.width = 'auto';
+    mov.style.height = '100%';
+  }
+
+  function getActivePlayerRatio() {
+    if (window._ytMode) return DEFAULT_PLAYER_RATIO;
+    if (mov?.videoWidth && mov?.videoHeight) return mov.videoWidth / mov.videoHeight;
+    const cachedRatio = Number.parseFloat(mov?.dataset?.aspectRatio || '');
+    return Number.isFinite(cachedRatio) && cachedRatio > 0 ? cachedRatio : null;
+  }
+
+  function syncPlayerLayout() {
+    if (!playerShell || !playerStage) return;
+
+    const shellRect = playerShell.getBoundingClientRect();
+    const shellWidth = Math.round(shellRect.width);
+    const shellHeight = Math.round(shellRect.height);
+    if (!shellWidth || !shellHeight) return;
+
+    const ratio = getActivePlayerRatio();
+    if (!ratio) {
+      playerStage.style.width = '100%';
+      playerStage.style.height = '100%';
+      applyMainVideoFit(shellWidth, shellHeight, shellWidth / shellHeight);
+      syncControlBarLayout();
+      return;
+    }
+
+    const shellRatio = shellWidth / shellHeight;
+    let nextWidth = shellWidth;
+    let nextHeight = shellHeight;
+
+    if (ratio > shellRatio) nextHeight = Math.round(shellWidth / ratio);
+    else nextWidth = Math.round(shellHeight * ratio);
+
+    playerStage.style.width = `${nextWidth}px`;
+    playerStage.style.height = `${nextHeight}px`;
+
+    if (!window._ytMode) applyMainVideoFit(nextWidth, nextHeight, ratio);
+    syncControlBarLayout();
+  }
+
+  window.syncPlayerLayout = syncPlayerLayout;
+
+  mov.addEventListener('loadedmetadata', () => {
+    ttot.textContent = fmt(mov.duration);
+    syncPlayerLayout();
+  });
+  mov.addEventListener('resize', syncPlayerLayout);
   mov.addEventListener('play',  () => updatePlayPauseIcon(true));
   mov.addEventListener('pause', () => updatePlayPauseIcon(false));
 
@@ -1371,7 +1525,7 @@ input[type=range]#seek-bar::-webkit-slider-thumb{appearance:none;width:14px;heig
   // Fullscreen
   document.getElementById('fullscreen-btn').addEventListener('click', () => {
     if (!document.fullscreenElement) {
-      const fullscreenTarget = document.getElementById('screen-watch');
+      const fullscreenTarget = document.getElementById('player-shell');
       fullscreenTarget?.requestFullscreen?.();
     }
     else document.exitFullscreen?.();
@@ -1444,8 +1598,15 @@ input[type=range]#seek-bar::-webkit-slider-thumb{appearance:none;width:14px;heig
   }
 
   syncControlBarLayout();
+  syncPlayerLayout();
   if (cbar && 'ResizeObserver' in window) {
     new ResizeObserver(() => syncControlBarLayout()).observe(cbar);
+  }
+  if (playerShell && 'ResizeObserver' in window) {
+    new ResizeObserver(() => {
+      syncPlayerLayout();
+      syncPipBounds({ animate: true });
+    }).observe(playerShell);
   }
 
   // ── Helpers ──────────────────────────────────────────────────────────
@@ -1669,7 +1830,7 @@ input[type=range]#seek-bar::-webkit-slider-thumb{appearance:none;width:14px;heig
   mov.addEventListener('play',  onPlayStateChange);
   mov.addEventListener('pause', onPlayStateChange);
 
-  // ── PiP overlay: drag / resize / chat-collision ─────────────────────────
+  // ── PiP overlay: drag / resize ──────────────────────────────────────────
   //
   // DRAG vs RESIZE separation:
   //   - Resize handles (.pip-resize-handle corners) capture pointerdown first
@@ -1681,16 +1842,8 @@ input[type=range]#seek-bar::-webkit-slider-thumb{appearance:none;width:14px;heig
   //     touch-action:none is set inline during active gestures to suppress
   //     scroll interference on mobile.
   //
-  // CHAT COLLISION:
-  //   - A MutationObserver watches #screen-watch for the .chat-open class.
-  //   - On open: if the PiP right edge overlaps the chat panel left edge,
-  //     the bubble is shifted left (via CSS transition on the element itself).
-  //     The original position is saved so it can be restored on close.
-  //   - On close: original position is restored with the same smooth transition.
-  //   - CSS transition is applied only during the shift/restore so normal
-  //     drag/resize remain perfectly crisp with no lag.
-
   const PIP_CONTROLS_HIDE_DELAY_MS = 3000;
+  const PIP_EDGE_MARGIN = 20;
   let pipControlsVisible = false;
   let pipControlsHovering = false;
   let pipControlsInteracting = false;
@@ -1745,48 +1898,102 @@ input[type=range]#seek-bar::-webkit-slider-thumb{appearance:none;width:14px;heig
       setPipControlsHidden(true);
       return;
     }
+    syncPipBounds();
     showPipControls();
   };
 
   // ── Geometry helpers ──────────────────────────────────────────────────
 
-  function clampPipPosition(left, top) {
-    if (!pip) return { left, top };
-    const w = pip.offsetWidth;
-    const h = pip.offsetHeight;
-    // Keep at least 20% of the bubble visible on each edge
-    const visX = w * 0.2;
-    const visY = h * 0.2;
+  const pipPosition = { x: 0, y: 0 };
+  let pipHasManualPosition = false;
+
+  function getPipBoundsRoot() {
+    return playerShell || watchScreen || pip?.offsetParent || document.body;
+  }
+
+  function getPipBoundsRect() {
+    const root = getPipBoundsRoot();
+    const rect = root?.getBoundingClientRect?.();
     return {
-      left: Math.min(Math.max(left, visX - w), window.innerWidth  - visX),
-      top:  Math.min(Math.max(top,  visY - h), window.innerHeight - visY),
+      width: rect?.width || window.innerWidth,
+      height: rect?.height || window.innerHeight,
+    };
+  }
+
+  function clampPipPosition(x, y, width = pip?.offsetWidth ?? 0, height = pip?.offsetHeight ?? 0) {
+    const { width: rootWidth, height: rootHeight } = getPipBoundsRect();
+    const maxX = Math.max(PIP_EDGE_MARGIN, rootWidth - width - PIP_EDGE_MARGIN);
+    const maxY = Math.max(PIP_EDGE_MARGIN, rootHeight - height - PIP_EDGE_MARGIN);
+    return {
+      x: Math.min(Math.max(x, PIP_EDGE_MARGIN), maxX),
+      y: Math.min(Math.max(y, PIP_EDGE_MARGIN), maxY),
     };
   }
 
   function getPipSizeBounds() {
+    const { width: rootWidth, height: rootHeight } = getPipBoundsRect();
     return {
       minWidth:  150,
       minHeight: 112,
-      maxWidth:  Math.min(window.innerWidth  * 0.42, 360),
-      maxHeight: Math.min(window.innerHeight * 0.36, 260),
+      maxWidth:  Math.max(150, Math.min(rootWidth  * 0.42, 360)),
+      maxHeight: Math.max(112, Math.min(rootHeight * 0.36, 260)),
     };
   }
 
-  function applyPipPosition(left, top) {
+  function renderPipPosition() {
     if (!pip) return;
-    const next = clampPipPosition(left, top);
-    pip.style.left  = next.left + 'px';
-    pip.style.top   = next.top  + 'px';
-    pip.style.right = 'auto';
+    pip.style.transform = `translate3d(${Math.round(pipPosition.x)}px, ${Math.round(pipPosition.y)}px, 0)`;
   }
 
-  function applyPipSize(width, height, left = pip?.offsetLeft ?? 0, top = pip?.offsetTop ?? 0) {
+  function applyPipPosition(x, y, { animate = false, markManual = true } = {}) {
+    if (!pip) return;
+    const next = clampPipPosition(x, y);
+    pipPosition.x = next.x;
+    pipPosition.y = next.y;
+    if (markManual) pipHasManualPosition = true;
+    if (animate) {
+      pip.style.transition = 'transform 0.3s cubic-bezier(.4,0,.2,1), width .18s ease, height .18s ease';
+      pip.addEventListener('transitionend', () => {
+        if (!pipDragging && !pipResizeDir) pip.style.removeProperty('transition');
+      }, { once: true });
+    } else if (!pipDragging && !pipResizeDir) {
+      pip.style.removeProperty('transition');
+    }
+    renderPipPosition();
+  }
+
+  function getDefaultPipPosition(width = pip?.offsetWidth ?? 0, height = pip?.offsetHeight ?? 0) {
+    const { width: rootWidth } = getPipBoundsRect();
+    return clampPipPosition(rootWidth - width - PIP_EDGE_MARGIN, PIP_EDGE_MARGIN, width, height);
+  }
+
+  function resetPipPosition({ animate = false } = {}) {
+    if (!pip) return;
+    const next = getDefaultPipPosition(pip.offsetWidth, pip.offsetHeight);
+    pipHasManualPosition = false;
+    applyPipPosition(next.x, next.y, { animate, markManual: false });
+  }
+
+  function syncPipBounds({ animate = false } = {}) {
+    if (!pip || pip.style.display === 'none') return;
+    if (!pipHasManualPosition) {
+      const next = getDefaultPipPosition(pip.offsetWidth, pip.offsetHeight);
+      applyPipPosition(next.x, next.y, { animate, markManual: false });
+      return;
+    }
+    applyPipPosition(pipPosition.x, pipPosition.y, { animate });
+  }
+
+  function applyPipSize(width, height, x = pipPosition.x, y = pipPosition.y) {
     if (!pip) return;
     const b = getPipSizeBounds();
     pip.style.width  = Math.min(Math.max(width,  b.minWidth),  b.maxWidth)  + 'px';
     pip.style.height = Math.min(Math.max(height, b.minHeight), b.maxHeight) + 'px';
-    applyPipPosition(left, top);
+    applyPipPosition(x, y);
   }
+
+  window.resetPipPosition = () => resetPipPosition();
+  window.syncPipBounds = syncPipBounds;
 
   // Returns true if the pointer landed in the draggable center zone.
   // The outer 20% border band is reserved for resize handles — dragging
@@ -1816,13 +2023,11 @@ input[type=range]#seek-bar::-webkit-slider-thumb{appearance:none;width:14px;heig
     pipDragging = true;
     pipDragPtId = e.pointerId;
     pip.setPointerCapture(e.pointerId); // track pointer even outside element
-    pip.style.touchAction = 'none';     // prevent scroll on mobile during drag
 
     const rect = pip.getBoundingClientRect();
     pipDragOx = e.clientX - rect.left;
     pipDragOy = e.clientY - rect.top;
     pip.style.cursor = 'grabbing';
-    pip.style.right  = 'auto';
 
     // Disable transition during drag so movement is instant
     pip.style.transition = 'none';
@@ -1831,16 +2036,17 @@ input[type=range]#seek-bar::-webkit-slider-thumb{appearance:none;width:14px;heig
 
   pip?.addEventListener('pointermove', (e) => {
     if (!pipDragging || e.pointerId !== pipDragPtId) return;
-    applyPipPosition(e.clientX - pipDragOx, e.clientY - pipDragOy);
+    const rootRect = getPipBoundsRoot().getBoundingClientRect();
+    applyPipPosition(e.clientX - rootRect.left - pipDragOx, e.clientY - rootRect.top - pipDragOy);
   });
 
   pip?.addEventListener('pointerup', (e) => {
     if (!pipDragging || e.pointerId !== pipDragPtId) return;
     pipDragging = false;
     pipDragPtId = null;
-    pip.style.cursor     = 'grab';
-    pip.style.touchAction = '';
-    pip.releasePointerCapture(e.pointerId);
+    pip.style.cursor = 'grab';
+    if (pip.hasPointerCapture?.(e.pointerId)) pip.releasePointerCapture(e.pointerId);
+    pip.style.removeProperty('transition');
     startPipControlsTimer();
   });
 
@@ -1848,8 +2054,8 @@ input[type=range]#seek-bar::-webkit-slider-thumb{appearance:none;width:14px;heig
     if (e.pointerId !== pipDragPtId) return;
     pipDragging = false;
     pipDragPtId = null;
-    pip.style.cursor     = 'grab';
-    pip.style.touchAction = '';
+    pip.style.cursor = 'grab';
+    pip.style.removeProperty('transition');
     startPipControlsTimer();
   });
 
@@ -1865,15 +2071,16 @@ input[type=range]#seek-bar::-webkit-slider-thumb{appearance:none;width:14px;heig
       if (!pip) return;
       showPipControls({ restartTimer: false });
       const rect = pip.getBoundingClientRect();
+      const rootRect = getPipBoundsRoot().getBoundingClientRect();
       pipResizeDir   = handle.dataset.resize;
       pipResizePtId  = e.pointerId;
       pipResizeStart = {
         x: e.clientX, y: e.clientY,
         width: rect.width, height: rect.height,
-        left: rect.left,   top:  rect.top,
+        xPos: rect.left - rootRect.left,
+        yPos: rect.top  - rootRect.top,
       };
       handle.setPointerCapture(e.pointerId);
-      handle.style.touchAction = 'none';
       pip.style.cursor     = getComputedStyle(handle).cursor;
       pip.style.transition = 'none'; // instant resize — no lag
       e.stopPropagation(); // prevent pip drag listener from firing
@@ -1888,23 +2095,21 @@ input[type=range]#seek-bar::-webkit-slider-thumb{appearance:none;width:14px;heig
 
       let w    = pipResizeStart.width;
       let h    = pipResizeStart.height;
-      let left = pipResizeStart.left;
-      let top  = pipResizeStart.top;
+      let xPos = pipResizeStart.xPos;
+      let yPos = pipResizeStart.yPos;
 
       if (pipResizeDir.includes('e')) w  = pipResizeStart.width  + dx;
       if (pipResizeDir.includes('s')) h  = pipResizeStart.height + dy;
-      if (pipResizeDir.includes('w')) { w  = pipResizeStart.width  - dx; left = pipResizeStart.left + dx; }
-      if (pipResizeDir.includes('n')) { h  = pipResizeStart.height - dy; top  = pipResizeStart.top  + dy; }
+      if (pipResizeDir.includes('w')) { w  = pipResizeStart.width  - dx; xPos = pipResizeStart.xPos + dx; }
+      if (pipResizeDir.includes('n')) { h  = pipResizeStart.height - dy; yPos = pipResizeStart.yPos + dy; }
 
       w = Math.min(Math.max(w, b.minWidth),  b.maxWidth);
       h = Math.min(Math.max(h, b.minHeight), b.maxHeight);
       // Recompute anchor after clamping so bubble doesn't jump
-      if (pipResizeDir.includes('w')) left = pipResizeStart.left + (pipResizeStart.width  - w);
-      if (pipResizeDir.includes('n')) top  = pipResizeStart.top  + (pipResizeStart.height - h);
+      if (pipResizeDir.includes('w')) xPos = pipResizeStart.xPos + (pipResizeStart.width  - w);
+      if (pipResizeDir.includes('n')) yPos = pipResizeStart.yPos + (pipResizeStart.height - h);
 
-      pip.style.width  = w + 'px';
-      pip.style.height = h + 'px';
-      applyPipPosition(left, top);
+      applyPipSize(w, h, xPos, yPos);
       e.preventDefault();
     });
 
@@ -1913,9 +2118,9 @@ input[type=range]#seek-bar::-webkit-slider-thumb{appearance:none;width:14px;heig
       pipResizeDir   = null;
       pipResizePtId  = null;
       pipResizeStart = null;
-      handle.releasePointerCapture(e.pointerId);
-      handle.style.touchAction = '';
+      if (handle.hasPointerCapture?.(e.pointerId)) handle.releasePointerCapture(e.pointerId);
       pip.style.cursor = 'grab';
+      pip.style.removeProperty('transition');
       startPipControlsTimer();
     });
 
@@ -1924,106 +2129,35 @@ input[type=range]#seek-bar::-webkit-slider-thumb{appearance:none;width:14px;heig
       pipResizeDir  = null;
       pipResizePtId = null;
       pipResizeStart = null;
-      handle.style.touchAction = '';
       pip.style.cursor = 'grab';
+      pip.style.removeProperty('transition');
       startPipControlsTimer();
     });
   });
 
   // Keep bubble on-screen when viewport resizes
   window.addEventListener('resize', () => {
-    if (!pip) return;
-    applyPipSize(pip.offsetWidth, pip.offsetHeight, pip.offsetLeft, pip.offsetTop);
-    if (watchScreen?.classList.contains('chat-open')) onChatOpen();
+    syncPlayerLayout();
     syncControlBarLayout();
+    syncPipBounds();
+  });
+  document.addEventListener('fullscreenchange', () => {
+    syncPlayerLayout();
+    syncPipBounds({ animate: true });
+    if (document.fullscreenElement === playerShell && pip?.style.display !== 'none') {
+      pip.style.display = 'block';
+      showPipControls({ restartTimer: false });
+    }
   });
 
   if (pip && 'ResizeObserver' in window) {
-    new ResizeObserver(() => applyPipPosition(pip.offsetLeft, pip.offsetTop)).observe(pip);
-  }
-
-  // ── Chat-panel collision detection ────────────────────────────────────
-  //
-  // When the chat panel opens (#screen-watch gets .chat-open), the PiP
-  // bubble — which is position:fixed — may now overlap the chat area.
-  // We detect this and smoothly slide the bubble left so it stays visible.
-  // When chat closes, we restore the saved position.
-  //
-  // Implementation detail: we add a short CSS transition ONLY for the
-  // shift/restore, then remove it immediately after so dragging stays crisp.
-
-  let pipPreChatLeft = null;
-  let pipPreChatTop  = null;
-  let pipChatShiftActive = false;
-
-  function animatePipTo(left, top) {
-    if (!pip) return;
-    const clamped = clampPipPosition(left, top);
-    pip.style.transition = 'left 0.3s cubic-bezier(.4,0,.2,1), top 0.3s cubic-bezier(.4,0,.2,1)';
-    pip.style.left = clamped.left + 'px';
-    pip.style.top  = clamped.top  + 'px';
-    pip.addEventListener('transitionend', () => { pip.style.transition = 'none'; }, { once: true });
-  }
-
-  function getOpenSplitChatPanelRect() {
-    const chatPanel = document.getElementById('chat-panel');
-    if (!watchScreen || !chatPanel) return null;
-    if (watchScreen.dataset.chatLayout !== 'split') return null;
-    const rect = chatPanel.getBoundingClientRect();
-    return rect.width > 0 ? rect : null;
-  }
-
-  function onChatOpen() {
-    if (!pip || pip.style.display === 'none') return;
-    const chatRect = getOpenSplitChatPanelRect();
-    if (!chatRect) return;
-
-    const rect = pip.getBoundingClientRect();
-    const curLeft = rect.left;
-    const curTop  = rect.top;
-    const anchorLeft = pipChatShiftActive && pipPreChatLeft !== null ? pipPreChatLeft : curLeft;
-    const anchorTop  = pipChatShiftActive && pipPreChatTop !== null ? pipPreChatTop : curTop;
-    const anchorRight = anchorLeft + pip.offsetWidth;
-
-    pip.style.right = 'auto';
-    pip.style.left  = curLeft + 'px';
-    pip.style.top   = curTop  + 'px';
-
-    if (anchorRight <= chatRect.left) {
-      if (pipChatShiftActive) {
-        pipChatShiftActive = false;
-        animatePipTo(anchorLeft, anchorTop);
-      }
-      return;
-    }
-
-    if (!pipChatShiftActive) {
-      pipPreChatLeft = curLeft;
-      pipPreChatTop  = curTop;
-    }
-
-    pipChatShiftActive = true;
-    animatePipTo(chatRect.left - pip.offsetWidth - 12, anchorTop);
-  }
-
-  function onChatClose() {
-    if (!pip || pipPreChatLeft === null || pipPreChatTop === null) return;
-    const restoreLeft = pipPreChatLeft;
-    const restoreTop  = pipPreChatTop;
-    pipPreChatLeft = null;
-    pipPreChatTop  = null;
-    pipChatShiftActive = false;
-    animatePipTo(restoreLeft, restoreTop);
+    new ResizeObserver(() => syncPipBounds()).observe(pip);
   }
 
   if (watchScreen) {
-    let wasChatOpen = watchScreen.classList.contains('chat-open');
     new MutationObserver(() => {
-      const isChatOpen = watchScreen.classList.contains('chat-open');
-      if (isChatOpen && !wasChatOpen) onChatOpen();
-      else if (!isChatOpen && wasChatOpen) onChatClose();
-      else if (isChatOpen) onChatOpen();
-      wasChatOpen = isChatOpen;
+      syncPlayerLayout();
+      syncPipBounds({ animate: true });
     }).observe(watchScreen, { attributes: true, attributeFilter: ['class', 'data-chat-layout'] });
   }
 

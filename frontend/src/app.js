@@ -107,10 +107,26 @@ const screenEls = {
   watch: document.getElementById('screen-watch'),
 };
 
+function clearVideoAspectMetadata(videoEl, containerEl) {
+  if (videoEl) {
+    videoEl.style.removeProperty('width');
+    videoEl.style.removeProperty('height');
+    delete videoEl.dataset.aspectRatio;
+    delete videoEl.dataset.orientation;
+  }
+  if (containerEl) {
+    delete containerEl.dataset.aspectRatio;
+    delete containerEl.dataset.orientation;
+  }
+}
+
 function syncVideoAspectMetadata(videoEl, containerEl) {
   if (!videoEl || !containerEl) return;
   const { videoWidth, videoHeight } = videoEl;
-  if (!videoWidth || !videoHeight) return;
+  if (!videoWidth || !videoHeight) {
+    clearVideoAspectMetadata(videoEl, containerEl);
+    return;
+  }
 
   const ratio = videoWidth / videoHeight;
   const orientation =
@@ -125,6 +141,19 @@ function syncVideoAspectMetadata(videoEl, containerEl) {
   videoEl.dataset.orientation = orientation;
   containerEl.dataset.aspectRatio = ratioText;
   containerEl.dataset.orientation = orientation;
+
+  const { width: containerWidth, height: containerHeight } = containerEl.getBoundingClientRect();
+  if (!containerWidth || !containerHeight) return;
+
+  const containerRatio = containerWidth / containerHeight;
+  if (ratio > containerRatio) {
+    videoEl.style.width = '100%';
+    videoEl.style.height = 'auto';
+    return;
+  }
+
+  videoEl.style.width = 'auto';
+  videoEl.style.height = '100%';
 }
 
 function wireVideoAspectMetadata(videoEl, containerEl) {
@@ -132,6 +161,10 @@ function wireVideoAspectMetadata(videoEl, containerEl) {
   const sync = () => syncVideoAspectMetadata(videoEl, containerEl);
   videoEl.addEventListener('loadedmetadata', sync);
   videoEl.addEventListener('resize', sync);
+  videoEl.addEventListener('emptied', () => clearVideoAspectMetadata(videoEl, containerEl));
+  if ('ResizeObserver' in window) {
+    new ResizeObserver(sync).observe(containerEl);
+  }
   sync();
 }
 
@@ -594,7 +627,11 @@ function applyRemoteCameraState() {
 }
 
 function renderRemoteMediaUI({ immediateCamera = false } = {}) {
-  if (remoteMicBadge) remoteMicBadge.hidden = remotePeerState.isMicOn;
+  if (remoteMicBadge) {
+    const showMuteBadge = !remotePeerState.isMicOn;
+    remoteMicBadge.classList.toggle('active', showMuteBadge);
+    remoteMicBadge.setAttribute('aria-hidden', showMuteBadge ? 'false' : 'true');
+  }
   if (remoteNameChip) remoteNameChip.textContent = resolveParticipantName(remotePeerState.participantId, remotePeerState.name);
   if (remoteCamOffName) remoteCamOffName.textContent = resolveParticipantName(remotePeerState.participantId, remotePeerState.name);
   if (remoteCamOffAvatar) remoteCamOffAvatar.textContent = getDisplayInitials(resolveParticipantName(remotePeerState.participantId, remotePeerState.name));
@@ -2754,9 +2791,8 @@ function showCallUI(visible) {
   }
   if (visible) {
     if (pipBubble) {
-      pipBubble.style.left = '';
-      pipBubble.style.top = '20px';
-      pipBubble.style.right = '20px';
+      window.resetPipPosition?.();
+      window.syncPipBounds?.();
     }
 
     // BUG FIX: was unconditionally resetting icon/button state to defaults on
@@ -3211,6 +3247,10 @@ function setRoomModeUI(mode, sendWs = true) {
     if (ytWrap)  ytWrap.classList.remove('active');
     if (backBtn) backBtn.textContent = '← Change file';
   }
+
+  window.requestAnimationFrame(() => {
+    window.syncPlayerLayout?.();
+  });
 
   resetReadyState({ disable: true });
   // Only broadcast ready-state reset when WE initiated the switch (sendWs=true).
