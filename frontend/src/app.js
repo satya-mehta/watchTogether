@@ -7,7 +7,6 @@ import {
   persistDisplayName,
   sanitizeDisplayName,
 } from './profile.js';
-import { start } from 'node:repl';
 
 // ── Config ────────────────────────────────────────────────────────────────
 const APP_CONFIG = window.WATCH_TOGETHER_CONFIG ?? {};
