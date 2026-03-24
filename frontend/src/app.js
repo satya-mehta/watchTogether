@@ -747,8 +747,8 @@ function canSendRoomControls() {
 }
 
 function syncLocalMediaStateFromCall() {
-  localMediaState.isMicOn = !(call?.isMuted ?? false);
-  localMediaState.isCameraOn = !(call?.isCamOff ?? false);
+  localMediaState.isMicOn = !!call?.hasAudio && !(call?.isMuted ?? false);
+  localMediaState.isCameraOn = !!call?.hasVideo && !(call?.isCamOff ?? false);
 }
 
 function queueMediaSync(reason = 'unknown') {
@@ -2599,6 +2599,12 @@ async function startVideoCall() {
       remoteVideoTrackHidden = false;
       renderRemoteMediaUI();
     })
+    .on('local_media_changed', () => {
+      syncLocalMediaStateFromCall();
+      syncCallButtonState();
+      renderRemoteMediaUI({ immediateCamera: true });
+      handleMediaSync({ broadcast: true });
+    })
     .on('remote_play_blocked', () => {
       showToast('Tap once if your friend\u2019s video does not appear', 'info');
     })
@@ -2613,10 +2619,18 @@ async function startVideoCall() {
       handleCallIceState(state);
     })
     .on('camera_unavailable', () => {
-      localMediaState.isCameraOn = false;
+      syncLocalMediaStateFromCall();
+      syncCallButtonState();
       renderRemoteMediaUI();
-      broadcastLocalMediaState('camera_toggle');
+      handleMediaSync({ broadcast: true });
       showToast('Camera not available — audio only');
+    })
+    .on('media_unavailable', () => {
+      syncLocalMediaStateFromCall();
+      syncCallButtonState();
+      renderRemoteMediaUI();
+      handleMediaSync({ broadcast: true });
+      showToast('Camera and microphone not available right now');
     })
     .on('ice_failed', () => {
       if (state.presenceState === 'offline') return;

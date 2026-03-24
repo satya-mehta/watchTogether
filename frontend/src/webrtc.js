@@ -187,6 +187,7 @@ export class VideoCall extends EventTarget {
     this._pendingCandidates    = [];
     this._remotePlayBlocked    = false;
     this._boundRemotePlaybackRetry = () => this._retryRemotePlayback();
+    this._boundVisibilityMediaRetry = () => this._retryPendingLocalMedia();
     this._unsubscribeClientEvents  = [];
     this._remoteStreamTimer    = null;
     this._disconnectTimer      = null;
@@ -194,6 +195,9 @@ export class VideoCall extends EventTarget {
     this._audioSender          = null;
     this._cameraSwitching      = false;
     this._cameraEnabled        = true;
+    this._ensureMediaPromise   = null;
+    this._shouldRetryVideo     = false;
+    this._shouldRetryAudio     = false;
     this._makingOffer          = false;
     this._iceRestartCount      = 0;
 
@@ -217,34 +221,15 @@ export class VideoCall extends EventTarget {
   async start(isInitiator = false) {
     this.isInitiator = isInitiator;
     this._started    = true;
-
-    try {
-      this.localStream = await navigator.mediaDevices.getUserMedia({
-        video: { width: { ideal: 640 }, height: { ideal: 480 }, facingMode: 'user' },
-        audio: { echoCancellation: true, noiseSuppression: true, sampleRate: 48000 },
-      });
-    } catch (err) {
-      console.warn('[WebRTC] getUserMedia failed, trying audio only:', err.message);
-      try {
-        this.localStream = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
-        this._emit('camera_unavailable');
-      } catch {
-        this.localStream = new MediaStream();
-        this._emit('media_unavailable');
-      }
-    }
-
-    if (this.localEl) {
-      try {
-        this.localEl.muted       = true;
-        this.localEl.autoplay    = true;
-        this.localEl.playsInline = true;
-        this.localEl.srcObject   = this.localStream;
-        this.localEl.play().catch(() => {});
-      } catch (err) {
-        console.error('[WebRTC] Failed to attach local stream:', err.message);
-      }
-    }
+    this.localStream = new MediaStream();
+    await this.ensureMedia({
+      audio: true,
+      video: true,
+      reason: 'start',
+      emitFailureEvents: true,
+    });
+    this._attachLocalPreview();
+    document.addEventListener('visibilitychange', this._boundVisibilityMediaRetry, true);
 
     this._createPeerConnection();
     this._armRemoteStreamWatchdog();
@@ -259,7 +244,16 @@ export class VideoCall extends EventTarget {
 
   toggleMute() {
     const track = this._getTrack('audio');
-    if (!track) return true;
+    if (!track) {
+      this._shouldRetryAudio = true;
+      this.ensureMedia({
+        audio: true,
+        video: false,
+        reason: 'toggle-mute',
+        emitFailureEvents: true,
+      }).catch(() => {});
+      return false;
+    }
     track.enabled = !track.enabled;
     const muted = !track.enabled;
     this._emit('mute_changed', { muted });
@@ -267,11 +261,15 @@ export class VideoCall extends EventTarget {
   }
 
   toggleCamera() {
-    this._cameraEnabled = !this._cameraEnabled;
-    if (this._cameraEnabled) {
-      this._resumeCamera();
-    } else {
+    const hasVideoTrack = this._hasUsableTrack('video');
+    if (this._cameraEnabled && hasVideoTrack) {
+      this._cameraEnabled = false;
+      this._shouldRetryVideo = false;
       this._releaseCamera();
+    } else {
+      this._cameraEnabled = true;
+      this._shouldRetryVideo = true;
+      this._resumeCamera();
     }
     return !this._cameraEnabled;
   }
@@ -311,35 +309,26 @@ export class VideoCall extends EventTarget {
         return;
       }
 
-      const videoStream = await navigator.mediaDevices.getUserMedia({
-        video: { width: { ideal: 640 }, height: { ideal: 480 }, facingMode: 'user' },
-      }).catch(err => {
-        console.warn('[WebRTC] Camera unavailable on resume:', err.message);
-        this._emit('camera_unavailable');
-        throw err;
+      await this.ensureMedia({
+        audio: false,
+        video: true,
+        reason: 'camera-resume',
+        emitFailureEvents: true,
       });
-
-      const videoTrack = videoStream.getVideoTracks()[0];
-      if (!videoTrack) throw new Error('No video track in resumed stream');
-
-      if (this._videoSender) {
-        await this._videoSender.replaceTrack(videoTrack);
-      } else if (this.pc) {
-        this._videoSender = this.pc.addTrack(videoTrack, this.localStream);
+      if (!this._hasUsableTrack('video')) {
+        this._cameraEnabled = false;
+        this._shouldRetryVideo = true;
+        return;
       }
-
-      this.localStream?.addTrack(videoTrack);
-
-      if (this.localEl) {
-        this.localEl.srcObject = this.localStream;
-        this.localEl.style.opacity = '1';
-        this.localEl.play().catch(() => {});
-      }
+      this._attachLocalPreview();
+      if (this.localEl) this.localEl.style.opacity = '1';
 
       this._emit('camera_changed', { hidden: false });
-      console.log('[WebRTC] Camera resumed via new track (replaceTrack)');
+      console.log('[WebRTC] Camera resumed via late track attach');
     } catch (err) {
       console.error('[WebRTC] Error resuming camera:', err);
+      this._cameraEnabled = false;
+      this._shouldRetryVideo = true;
       this._emit('camera_unavailable');
     } finally {
       this._cameraSwitching = false;
@@ -347,7 +336,7 @@ export class VideoCall extends EventTarget {
   }
 
   get isMuted()  { return !this._getTrack('audio')?.enabled ?? true; }
-  get isCamOff() { return !this._cameraEnabled; }
+  get isCamOff() { return !this._cameraEnabled || !this._hasUsableTrack('video'); }
   get hasVideo() { return (this.localStream?.getVideoTracks().length ?? 0) > 0; }
   get hasAudio() { return (this.localStream?.getAudioTracks().length ?? 0) > 0; }
   get qualityTier() { return this._currentTier; }
@@ -387,6 +376,7 @@ export class VideoCall extends EventTarget {
     document.removeEventListener('touchend',         this._boundRemotePlaybackRetry, true);
     document.removeEventListener('keydown',          this._boundRemotePlaybackRetry, true);
     document.removeEventListener('visibilitychange', this._boundRemotePlaybackRetry, true);
+    document.removeEventListener('visibilitychange', this._boundVisibilityMediaRetry, true);
     document.removeEventListener('fullscreenchange', this._boundRemotePlaybackRetry, true);
     this._emit('ended');
     console.log('[WebRTC] Call ended');
@@ -421,8 +411,8 @@ export class VideoCall extends EventTarget {
         if (track.kind === 'audio') this._audioSender = sender;
       });
     } else {
-      this.pc.addTransceiver('video', { direction: 'recvonly' });
-      this.pc.addTransceiver('audio', { direction: 'recvonly' });
+      this._videoSender = this.pc.addTransceiver('video', { direction: 'recvonly' }).sender;
+      this._audioSender = this.pc.addTransceiver('audio', { direction: 'recvonly' }).sender;
     }
 
     this.pc.ontrack = (event) => {
@@ -533,8 +523,9 @@ export class VideoCall extends EventTarget {
     };
 
     this.pc.onnegotiationneeded = async () => {
-      if (!this.isInitiator) return;
-      await this._createOffer();
+      if (!this.pc || !this._started) return;
+      if (!this.isInitiator && !this.pc.remoteDescription) return;
+      await this._createOffer({ allowPolitePeer: true });
     };
   }
 
@@ -600,9 +591,12 @@ export class VideoCall extends EventTarget {
 
   // ── Offer / Answer ────────────────────────────────────────────────────
 
-  async _createOffer({ iceRestart = false } = {}) {
+  async _createOffer({ iceRestart = false, allowPolitePeer = false } = {}) {
     if (!this.pc) return;
-    if (!this.isInitiator) return;
+    if (!this._started) return;
+    if (iceRestart && !this.isInitiator) return;
+    if (!this.isInitiator && !allowPolitePeer) return;
+    if (!this.isInitiator && allowPolitePeer && !this.pc.remoteDescription) return;
     if (this._makingOffer) {
       console.log('[WebRTC] Skipping redundant _createOffer (already making one)');
       return;
@@ -902,8 +896,175 @@ export class VideoCall extends EventTarget {
 
   // ── Helpers ───────────────────────────────────────────────────────────
 
+  _buildMediaConstraints({ audio = false, video = false } = {}) {
+    return {
+      video: video ? { width: { ideal: 640 }, height: { ideal: 480 }, facingMode: 'user' } : false,
+      audio: audio ? { echoCancellation: true, noiseSuppression: true, sampleRate: 48000 } : false,
+    };
+  }
+
+  _hasUsableTrack(kind) {
+    return !!this.localStream?.getTracks().find((track) => track.kind === kind && track.readyState !== 'ended');
+  }
+
+  _attachLocalPreview() {
+    if (!this.localEl) return;
+    try {
+      this.localEl.muted       = true;
+      this.localEl.autoplay    = true;
+      this.localEl.playsInline = true;
+      this.localEl.srcObject   = this.localStream;
+      if (this._hasUsableTrack('video') && this._cameraEnabled && !this._videoDisabledForQuality) {
+        this.localEl.style.opacity = '1';
+      } else {
+        this.localEl.style.opacity = '0';
+      }
+      this.localEl.play().catch(() => {});
+    } catch (err) {
+      console.error('[WebRTC] Failed to attach local stream:', err.message);
+    }
+  }
+
+  async ensureMedia({
+    audio = true,
+    video = true,
+    reason = 'manual',
+    emitFailureEvents = false,
+  } = {}) {
+    if (!this.localStream) this.localStream = new MediaStream();
+
+    const needsAudio = !!audio && !this._hasUsableTrack('audio');
+    const needsVideo = !!video && !this._hasUsableTrack('video');
+    if (!needsAudio && !needsVideo) {
+      if (audio) this._shouldRetryAudio = !this._hasUsableTrack('audio');
+      if (video) this._shouldRetryVideo = this._cameraEnabled && !this._hasUsableTrack('video');
+      this._attachLocalPreview();
+      return this.localStream;
+    }
+
+    if (this._ensureMediaPromise) return this._ensureMediaPromise;
+
+    this._ensureMediaPromise = (async () => {
+      let capturedStream = null;
+
+      try {
+        capturedStream = await navigator.mediaDevices.getUserMedia(
+          this._buildMediaConstraints({ audio: needsAudio, video: needsVideo })
+        );
+      } catch (err) {
+        if (needsAudio && needsVideo) {
+          console.warn('[WebRTC] getUserMedia failed, trying audio only:', err.message);
+          try {
+            capturedStream = await navigator.mediaDevices.getUserMedia(
+              this._buildMediaConstraints({ audio: true, video: false })
+            );
+            if (emitFailureEvents) this._emit('camera_unavailable');
+          } catch (audioErr) {
+            console.warn('[WebRTC] Audio fallback unavailable:', audioErr.message);
+            if (emitFailureEvents) this._emit('media_unavailable');
+          }
+        } else if (needsVideo) {
+          console.warn(`[WebRTC] Camera unavailable during ${reason}:`, err.message);
+          if (emitFailureEvents) this._emit('camera_unavailable');
+        } else if (needsAudio) {
+          console.warn(`[WebRTC] Microphone unavailable during ${reason}:`, err.message);
+          if (emitFailureEvents) this._emit('media_unavailable');
+        }
+      }
+
+      if (capturedStream) {
+        await this._applyLocalTracks(capturedStream, { reason });
+      } else {
+        this._attachLocalPreview();
+      }
+
+      if (audio) this._shouldRetryAudio = !this._hasUsableTrack('audio');
+      if (video) this._shouldRetryVideo = this._cameraEnabled && !this._hasUsableTrack('video');
+      return this.localStream;
+    })();
+
+    try {
+      return await this._ensureMediaPromise;
+    } finally {
+      this._ensureMediaPromise = null;
+    }
+  }
+
+  async _applyLocalTracks(stream, { reason = 'media-update' } = {}) {
+    if (!this.localStream) this.localStream = new MediaStream();
+
+    let mediaChanged = false;
+    for (const track of stream.getTracks()) {
+      const sender = await this._upsertSenderTrack(track);
+      if (track.kind === 'video') {
+        this._videoSender = sender || this._videoSender;
+        track.enabled = this._cameraEnabled && !this._videoDisabledForQuality;
+      }
+      if (track.kind === 'audio') this._audioSender = sender || this._audioSender;
+
+      const existingTrack = this._getTrack(track.kind);
+      if (existingTrack && existingTrack.id !== track.id) {
+        this.localStream.removeTrack(existingTrack);
+        try { existingTrack.stop(); } catch {}
+      }
+      if (!this.localStream.getTracks().some((localTrack) => localTrack.id === track.id)) {
+        this.localStream.addTrack(track);
+      }
+      mediaChanged = true;
+    }
+
+    this._attachLocalPreview();
+    if (mediaChanged && reason !== 'start') {
+      this._emit('local_media_changed', {
+        hasVideo: this.hasVideo,
+        hasAudio: this.hasAudio,
+        reason,
+      });
+    }
+  }
+
+  async _upsertSenderTrack(track) {
+    if (!this.pc) return null;
+
+    const senderRef = track.kind === 'video' ? '_videoSender' : '_audioSender';
+    const existingSender = this[senderRef];
+    if (existingSender) {
+      if (existingSender.track?.id !== track.id) {
+        await existingSender.replaceTrack(track);
+      }
+      const transceiver = this.pc.getTransceivers().find((item) => item.sender === existingSender);
+      if (transceiver && transceiver.direction !== 'sendrecv') transceiver.direction = 'sendrecv';
+      return existingSender;
+    }
+
+    const reusableTransceiver = this.pc.getTransceivers().find((item) => {
+      const senderTrack = item.sender?.track;
+      const receiverKind = item.receiver?.track?.kind;
+      return !senderTrack && receiverKind === track.kind;
+    });
+    if (reusableTransceiver) {
+      await reusableTransceiver.sender.replaceTrack(track);
+      reusableTransceiver.direction = 'sendrecv';
+      return reusableTransceiver.sender;
+    }
+
+    return this.pc.addTrack(track, this.localStream);
+  }
+
   _getTrack(kind) {
     return this.localStream?.getTracks().find(t => t.kind === kind) ?? null;
+  }
+
+  _retryPendingLocalMedia() {
+    if (!this._started) return;
+    if (document.visibilityState === 'hidden') return;
+    if (!this._shouldRetryAudio && !this._shouldRetryVideo) return;
+    this.ensureMedia({
+      audio: this._shouldRetryAudio,
+      video: this._cameraEnabled && this._shouldRetryVideo,
+      reason: 'visibility-retry',
+      emitFailureEvents: false,
+    }).catch(() => {});
   }
 
   _bindRemotePlaybackRetry() {
