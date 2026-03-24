@@ -1942,7 +1942,7 @@ function wireClientEvents() {
     const otherPeer = getOtherPeerSnapshot(data.peers, data.yourPeerId);
     if (otherPeer) {
       addPeerToUI(otherPeer);
-      ensureVideoCall(); // this one will trigger and ensure video call once someone joins the room.
+      ensureVideoCall({force: true}); // this one will trigger and ensure video call once someone joins the room.
       if (otherPeer.connectionState === 'reconnecting') {
         handleReconnect({ name: otherPeer.name });
       } else {
