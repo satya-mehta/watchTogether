@@ -2019,12 +2019,14 @@ input[type=range]#seek-bar::-webkit-slider-thumb{appearance:none;width:14px;heig
     return clampPipPosition(rootWidth - width - PIP_EDGE_MARGIN, PIP_EDGE_MARGIN, width, height);
   }
 
-  function resetPipPosition({ animate = false } = {}) {
+  function _resetPipPosition({ animate = false } = {}) {
     if (!pip) return;
     const next = getDefaultPipPosition(pip.offsetWidth, pip.offsetHeight);
     pipHasManualPosition = false;
     applyPipPosition(next.x, next.y, { animate, markManual: false });
   }
+
+  window.resetPipPosition = _resetPipPosition;
 
   function syncPipBounds({ animate = false } = {}) {
     if (!pip || pip.style.display === 'none') return;
@@ -2042,10 +2044,7 @@ input[type=range]#seek-bar::-webkit-slider-thumb{appearance:none;width:14px;heig
     pip.style.width  = Math.min(Math.max(width,  b.minWidth),  b.maxWidth)  + 'px';
     pip.style.height = Math.min(Math.max(height, b.minHeight), b.maxHeight) + 'px';
     applyPipPosition(x, y);
-  }
-
-  window.resetPipPosition = function (opts) { // fix for bug of recurssion call
-  return resetPipPosition(opts);
+    
   };
 
   window.syncPipBounds = syncPipBounds;
