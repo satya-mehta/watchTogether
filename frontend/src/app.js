@@ -2036,6 +2036,7 @@ function wireClientEvents() {
   client.on('sync_media_state', (payload) => handleMediaSync(payload));
 
   client.on('peer_left', (data) => {
+    resetFriendYtPreview();
     handlePeerOffline({
       name: data.name || getPeerDisplayName(),
       reason: data.reason || 'left',

@@ -528,54 +528,183 @@ A secondary problem: even when the backend held off on `peer_left`, the frontend
 
 **Focus:** Implement a clean three-layer state system separating signaling, presence, and call lifecycle so reconnects no longer break the call.
 
+---
+
 ### Problem
 
 The call lifecycle was coupled directly to WebSocket presence events:
-- `peer_reconnecting` → `handleReconnect()` which internally called `handleRecovery()` which called `maybeResumeCall()` — the chain was opaque and the separation between "socket dropped" and "peer left" was not enforced at the handler level.
-- `peer_joined` had no guard against firing during an active call. If a `peer_joined` arrived mid-session (e.g. due to a race with the reconnect path), it would reset presence and ready state on a live call.
-- `setPresenceState('unstable')` was setting `peerPresent = false` because the check was `state === 'online'` only. This halted sync heartbeats and room controls during the reconnect grace window — exactly when you want them to keep running.
+
+* `peer_reconnecting` → `handleReconnect()` which internally called `handleRecovery()` which called `maybeResumeCall()` — the chain was opaque and the separation between "socket dropped" and "peer left" was not enforced at the handler level.
+* `peer_joined` had no guard against firing during an active call. If a `peer_joined` arrived mid-session (e.g. due to a race with the reconnect path), it would reset presence and ready state on a live call.
+* `setPresenceState('unstable')` was setting `peerPresent = false` because the check was `state === 'online'` only. This halted sync heartbeats and room controls during the reconnect grace window — exactly when you want them to keep running.
+
+---
 
 ### Fixes applied (`app.js`)
 
 **`setPresenceState` — `'unstable'` keeps `peerPresent = true`**
-- Before: `peerPresent = state === 'online'` — unstable set it false, disabling `canSendRoomControls()` and sync.
-- After: `peerPresent = state === 'online' || state === 'unstable'` — sync and controls stay active during the grace window. Only `'offline'` disables them.
+
+* Before: `peerPresent = state === 'online'`
+* After: `peerPresent = state === 'online' || state === 'unstable'`
 
 **`peer_joined` handler — call-active guard**
-- Added early return if `callState === 'active'` or `'connecting'`.
-- In that case only `addPeerToUI()` is called — no presence reset, no ready state wipe, no toast.
-- Prevents a stale or race-delayed `peer_joined` from disrupting a live call session.
+
+* Early return if `callState === 'active'` or `'connecting'`
+* Prevents state reset during active call
 
 **`peer_reconnecting` handler — inline, explicit**
-- Replaced the `handleReconnect()` delegation with inline logic that makes the spec contract visible in the code.
-- Sets `presenceState = 'unstable'`, shows reconnecting UI, starts the offline fallback timer.
-- Explicitly does NOT end the call or pause video — comment documents the intent.
+
+* Sets `presenceState = 'unstable'`
+* Keeps call alive
 
 **`peer_reconnected` handler — inline, explicit**
-- Replaced the `handleRecovery()` delegation with inline logic.
-- Sets `presenceState = 'online'`, clears the offline timer, hides the reconnecting UI.
-- Calls `maybeResumeCall()` directly — which internally checks whether ICE actually needs help before doing anything, so this is a no-op when ICE self-recovered.
-- Explicitly does NOT emit `peer_joined` or restart the call.
 
-### State matrix after fix
+* Sets `presenceState = 'online'`
+* Calls `maybeResumeCall()`
 
-| Event | signalingState | presenceState | callState | peerPresent | Call action |
-|---|---|---|---|---|---|
-| `peer_reconnecting` | connected | unstable | active (unchanged) | true | none |
-| `peer_reconnected` | connected | online | active (unchanged) | true | maybeResume (ICE-gated) |
-| `peer_left` (timeout) | connected | offline | ended | false | endCall |
-| `peer_joined` (active call) | connected | online | active (unchanged) | true | UI update only |
+---
 
-### Files changed
-- `frontend/src/app.js` — `setPresenceState`, `peer_joined`, `peer_reconnecting`, `peer_reconnected` handlers.
-- No changes to `client.js` — event emission was already correct.
-- No changes to WebRTC signaling, playback sync, or YouTube logic.
+# 🔥 Additional Fixes & Improvements
 
-## To Do 
-- video call controls hidden by default, show on hover
-- grey out the chat icon ✅
-- default video call overlay size, based on incoming frame. 
-- show chat deafult text on chat section
+## 1. YouTube Sync Deadlock (Ready Button)
+
+**Problem:** Duration-based readiness caused deadlock
+
+**Fix:** Introduced `hasVideo` flag
+
+```js
+peer.hasVideo = msg.hasVideo || false;
+```
+
+```js
+if (a.hasVideo && b.hasVideo)
+```
+
+---
+
+## 2. `hasVideo` Not Sent from Client
+
+**Fix:**
+
+```js
+fileReady(durationSec, fileName = null, hasVideo = false) {
+  this._send('file_ready', { durationSec, fileName, hasVideo });
+}
+```
+
+---
+
+## 3. Sender Not Entering Ready State
+
+```js
+client.fileReady(ytDuration, info.title || videoId, true);
+```
+
+---
+
+## 4. Ready Toggle Echo Bug
+
+```js
+broadcast(myRoom, 'peer_ready', {...}, myPeerId);
+```
+
+---
+
+## 5. YouTube Race Condition Fix
+
+* Introduced `activeVideoId`
+* Scoped polling per video
+
+---
+
+## 6. WebRTC Call Start in Lobby
+
+```js
+ensureVideoCall({ force: true });
+```
+
+---
+
+## 7. Build Crash (`node:repl`)
+
+```js
+// removed invalid import
+import { start } from 'node:repl';
+```
+
+---
+
+## 8. Friend Thumbnail Not Updating
+
+```js
+updateFriendYtPreview(videoId, title);
+```
+
+Moved before early return
+
+---
+
+## 9. Background YouTube Playback
+
+* Added cleanup:
+
+  * `stopYtPolling()`
+  * `ytPlayer.pauseVideo()`
+
+---
+
+## 10. Call Disconnect vs Navigation
+
+* Distinguished lobby vs leave-room behavior
+
+---
+
+## 11. Missing `updateDuration`
+
+* Removed unused call
+
+```js
+client?.updateDuration(d);
+```
+
+---
+
+## 12. Stale UI State (Thumbnail Persistence)
+
+```js
+resetFriendYtPreview();
+```
+
+---
+
+## 13. Peer Leave Cleanup
+
+```js
+client.on('peer_left', () => {
+  resetFriendYtPreview();
+});
+```
+
+---
+
+# Key Learnings today
+
+* Separate state from metadata
+* Avoid event echo loops
+* Always reset UI explicitly
+* Ensure client-server contract consistency
+* Handle async media carefully
+
+---
+
+## To Do checklist
+
+* video call controls hidden by default, show on hover ✅
+* grey out the chat icon ✅
+* default video call overlay size ✅
+* show chat default text ✅
+* other ui bugs fixes in player screen ✅
+
 
 ---
 
