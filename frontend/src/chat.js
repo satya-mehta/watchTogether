@@ -13,8 +13,8 @@
  */
 
 // ── Constants ────────────────────────────────────────────────────────────────
-const CHAT_MAX_CHARS    = 500;  // hard cap enforced client-side too
-const SCROLL_THRESHOLD  = 80;   // px from bottom — auto-scroll fires below this
+const CHAT_MAX_CHARS = 500;  // hard cap enforced client-side too
+const SCROLL_THRESHOLD = 80;   // px from bottom — auto-scroll fires below this
 const RENDER_BATCH_SIZE = 200;  // max messages kept in DOM (oldest pruned)
 
 // ── Sanitization helper ──────────────────────────────────────────────────────
@@ -51,32 +51,32 @@ export class Chat {
    * @param {function}        opts.resolveParticipantName — (participantId, fallback) => string
    */
   constructor({ client, myName, getPeerName, resolveParticipantName }) {
-    this._client                 = client;
-    this._myName                 = myName;
-    this._myParticipantId        = null;
-    this._getPeerName            = getPeerName;
+    this._client = client;
+    this._myName = myName;
+    this._myParticipantId = null;
+    this._getPeerName = getPeerName;
     this._resolveParticipantName = resolveParticipantName;
 
     // In-memory message log — survives panel toggle
-    this._messages      = [];
+    this._messages = [];
     // Set of messageIds we've already rendered (dedup guard)
-    this._seenIds       = new Set();
+    this._seenIds = new Set();
     // Whether the chat panel is currently visible
-    this._open          = false;
+    this._open = false;
     // Unread count (only increments when panel is closed)
-    this._unread        = 0;
+    this._unread = 0;
 
     // DOM refs — populated in _buildDOM()
-    this._panel         = null;
-    this._msgContainer  = null;
-    this._msgFlow       = null;
-    this._msgStack      = null;
-    this._emptyState    = null;
-    this._input         = null;
-    this._sendBtn       = null;
+    this._panel = null;
+    this._msgContainer = null;
+    this._msgFlow = null;
+    this._msgStack = null;
+    this._emptyState = null;
+    this._input = null;
+    this._sendBtn = null;
     this._chatToggleBtn = null;
-    this._unreadDot     = null;
-    this._watchScreen   = null;
+    this._unreadDot = null;
+    this._watchScreen = null;
     this._layoutObserver = null;
     this._boundSyncLayout = () => {
       this._syncPanelLayoutMode();
@@ -136,10 +136,10 @@ export class Chat {
 
   /** Reset all chat state — call on room leave / home navigation. */
   reset() {
-    this._messages     = [];
-    this._seenIds      = new Set();
-    this._unread       = 0;
-    this._open         = false;
+    this._messages = [];
+    this._seenIds = new Set();
+    this._unread = 0;
+    this._open = false;
     if (this._msgStack) this._msgStack.innerHTML = '';
     if (this._msgContainer) this._msgContainer.scrollTop = 0;
     this._setUnreadDot(0);
@@ -163,15 +163,15 @@ export class Chat {
 
   _buildDOM() {
     const watchScreen = document.getElementById('screen-watch');
-    const reactions   = watchScreen?.querySelector('.reactions');
+    const reactions = watchScreen?.querySelector('.reactions');
     if (!watchScreen) return;
     this._watchScreen = watchScreen;
 
     // ── Chat toggle button (appended below reactions) ───────────────────────
     const toggleBtn = document.createElement('button');
-    toggleBtn.id        = 'chat-toggle-btn';
+    toggleBtn.id = 'chat-toggle-btn';
     toggleBtn.className = 'react-btn chat-toggle-btn';
-    toggleBtn.title     = 'Chat';
+    toggleBtn.title = 'Chat';
     toggleBtn.setAttribute('aria-label', 'Open chat');
     // Chat bubble SVG icon
     toggleBtn.innerHTML = `
@@ -184,11 +184,11 @@ export class Chat {
     reactions?.appendChild(toggleBtn);
 
     this._chatToggleBtn = toggleBtn;
-    this._unreadDot     = toggleBtn.querySelector('#chat-unread-dot');
+    this._unreadDot = toggleBtn.querySelector('#chat-unread-dot');
 
     // ── Chat panel ──────────────────────────────────────────────────────────
     const panel = document.createElement('div');
-    panel.id        = 'chat-panel';
+    panel.id = 'chat-panel';
     panel.className = 'chat-panel';
     panel.setAttribute('aria-label', 'Chat panel');
     panel.innerHTML = `
@@ -233,13 +233,13 @@ export class Chat {
       </div>`;
     watchScreen.appendChild(panel);
 
-    this._panel        = panel;
+    this._panel = panel;
     this._msgContainer = panel.querySelector('#chat-messages');
-    this._msgFlow      = panel.querySelector('#chat-messages-flow');
-    this._msgStack     = panel.querySelector('#chat-message-stack');
-    this._emptyState   = panel.querySelector('#chat-empty-state');
-    this._input        = panel.querySelector('#chat-input');
-    this._sendBtn      = panel.querySelector('#chat-send-btn');
+    this._msgFlow = panel.querySelector('#chat-messages-flow');
+    this._msgStack = panel.querySelector('#chat-message-stack');
+    this._emptyState = panel.querySelector('#chat-empty-state');
+    this._input = panel.querySelector('#chat-input');
+    this._sendBtn = panel.querySelector('#chat-send-btn');
 
     // Close button inside panel header
     panel.querySelector('#chat-close-btn').addEventListener('click', () => this._closePanel());
@@ -314,7 +314,7 @@ export class Chat {
 
   _trySend() {
     if (!this._client) return;
-    const raw  = this._input?.value ?? '';
+    const raw = this._input?.value ?? '';
     const text = sanitize(raw);
     if (!text) return;
     const participantId = this._myParticipantId || this._client.participantId || '__self__';
@@ -348,12 +348,12 @@ export class Chat {
     const resolvedName = this._resolveName(participantId, data.senderName);
 
     this._appendMessage({
-      messageId:  data.messageId,
+      messageId: data.messageId,
       participantId,
       senderName: resolvedName,
-      text:       sanitize(data.text),
-      timestamp:  data.timestamp || Date.now(),
-      isSelf:     false,
+      text: sanitize(data.text),
+      timestamp: data.timestamp || Date.now(),
+      isSelf: false,
     });
 
     // Show unread dot if panel is closed
@@ -381,27 +381,27 @@ export class Chat {
     const wasNearBottom = this._isNearBottom();
 
     // Build message element — all user content set via textContent (never innerHTML)
-    const el      = document.createElement('div');
-    el.className  = `chat-msg ${isSelf ? 'chat-msg--self' : 'chat-msg--peer'}`;
+    const el = document.createElement('div');
+    el.className = `chat-msg ${isSelf ? 'chat-msg--self' : 'chat-msg--peer'}`;
     el.dataset.id = messageId;
     el.dataset.participantId = participantId || '';
     el.dataset.self = isSelf ? 'true' : 'false';
 
-    const metaEl  = document.createElement('div');
+    const metaEl = document.createElement('div');
     metaEl.className = 'chat-msg-meta';
 
-    const nameEl  = document.createElement('span');
+    const nameEl = document.createElement('span');
     nameEl.className = 'chat-msg-name';
     nameEl.textContent = isSelf ? 'You' : this._resolveName(participantId, senderName);
 
-    const timeEl  = document.createElement('span');
+    const timeEl = document.createElement('span');
     timeEl.className = 'chat-msg-time';
     timeEl.textContent = formatTime(timestamp);
 
     metaEl.appendChild(nameEl);
     metaEl.appendChild(timeEl);
 
-    const textEl  = document.createElement('div');
+    const textEl = document.createElement('div');
     textEl.className = 'chat-msg-text';
     textEl.textContent = text; // safe — textContent, not innerHTML
 

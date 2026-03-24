@@ -53,39 +53,39 @@ function setCreateRoomLoading(isLoading) {
 }
 
 // ── DOM references ─────────────────────────────────────────────────────────
-const movieVideo    = document.getElementById('movie-video');     // <video> for the movie file
-const localVideo    = document.getElementById('local-video');     // <video muted> PiP self-view
-const remoteVideo   = document.getElementById('remote-video');    // <video> friend's face
+const movieVideo = document.getElementById('movie-video');     // <video> for the movie file
+const localVideo = document.getElementById('local-video');     // <video muted> PiP self-view
+const remoteVideo = document.getElementById('remote-video');    // <video> friend's face
 
-const fileInput     = document.getElementById('file-input');
+const fileInput = document.getElementById('file-input');
 const subtitleInput = document.getElementById('subtitle-input');
 const subtitlePicker = document.getElementById('subtitle-picker');
 const subtitleFileLabel = document.getElementById('subtitle-file-label');
 const subtitleClearBtn = document.getElementById('subtitle-clear-btn');
-const playPauseBtn  = document.getElementById('play-pause-btn');
-const seekBar       = document.getElementById('seek-bar');
+const playPauseBtn = document.getElementById('play-pause-btn');
+const seekBar = document.getElementById('seek-bar');
 const captionsSelect = document.getElementById('captions-select');
 const audioTrackSelect = document.getElementById('audio-track-select');
-const captionsHelp  = document.getElementById('captions-help');
+const captionsHelp = document.getElementById('captions-help');
 const audioTrackHelp = document.getElementById('audio-track-help');
 const captionsField = captionsSelect?.closest('.track-field');
 const audioTrackField = audioTrackSelect?.closest('.track-field');
 
-const muteBtn       = document.getElementById('mute-btn');
-const cameraBtn     = document.getElementById('camera-btn');
-const endCallBtn    = document.getElementById('end-call-btn');
-const muteIcon      = document.getElementById('mute-icon');
-const cameraIcon    = document.getElementById('camera-icon');
-const watchBackBtn  = document.getElementById('watch-back-btn');
-const lobbyBackBtn  = document.getElementById('lobby-back-btn');
+const muteBtn = document.getElementById('mute-btn');
+const cameraBtn = document.getElementById('camera-btn');
+const endCallBtn = document.getElementById('end-call-btn');
+const muteIcon = document.getElementById('mute-icon');
+const cameraIcon = document.getElementById('camera-icon');
+const watchBackBtn = document.getElementById('watch-back-btn');
+const lobbyBackBtn = document.getElementById('lobby-back-btn');
 
 const createRoomBtn = document.getElementById('create-room-btn');
-const joinRoomBtn   = document.getElementById('join-room-btn');
+const joinRoomBtn = document.getElementById('join-room-btn');
 const roomCodeInput = document.getElementById('room-code-input');
-const readyBtn      = document.getElementById('ready-btn');
-const landingAlert  = document.getElementById('landing-alert');
+const readyBtn = document.getElementById('ready-btn');
+const landingAlert = document.getElementById('landing-alert');
 const createRoomBtnLabel = createRoomBtn?.querySelector('.btn-label');
-const versionBadge  = document.getElementById('version-badge');
+const versionBadge = document.getElementById('version-badge');
 const selfNameInline = document.getElementById('self-name-inline');
 const selfNameText = document.getElementById('self-name-text');
 const selfNameEditBtn = document.getElementById('self-name-edit-btn');
@@ -100,8 +100,8 @@ const pipCallControls = document.getElementById('pip-call-controls');
 const pipRemoteStage = document.getElementById('pip-remote-stage');
 const pipLocalStage = document.getElementById('pip-local-stage');
 
-const syncToast     = document.getElementById('sync-toast');
-const reactionBtns  = document.querySelectorAll('[data-reaction]');
+const syncToast = document.getElementById('sync-toast');
+const reactionBtns = document.querySelectorAll('[data-reaction]');
 const screenEls = {
   landing: document.getElementById('screen-landing'),
   lobby: document.getElementById('screen-lobby'),
@@ -134,8 +134,8 @@ function syncVideoAspectMetadata(videoEl, containerEl) {
     ratio > 1.05
       ? 'landscape'
       : ratio < 0.95
-      ? 'portrait'
-      : 'square';
+        ? 'portrait'
+        : 'square';
   const ratioText = ratio.toFixed(3);
 
   videoEl.dataset.aspectRatio = ratioText;
@@ -173,11 +173,11 @@ wireVideoAspectMetadata(remoteVideo, pipRemoteStage);
 wireVideoAspectMetadata(localVideo, pipLocalStage);
 
 // ── App state ─────────────────────────────────────────────────────────────
-let client   = null;
-let call     = null;
+let client = null;
+let call = null;
 let callStarting = false;
-let isHost   = false;
-let myName   = getOrCreateDisplayName();
+let isHost = false;
+let myName = getOrCreateDisplayName();
 let myFileName = null;
 let roomCode = null;
 let peerPresent = false;
@@ -248,25 +248,25 @@ let callConnectionAnnounced = false;
 let iceUnhealthySince = 0;
 
 // ── YouTube mode state ────────────────────────────────────────────────────
-let roomMode        = 'local';  // 'local' | 'youtube'
-let ytVideoId       = null;     // current YouTube video ID
-let ytPlayer        = null;     // YT.Player instance
-let ytApiReady      = false;
-let ytPlayerReady   = false;
-let ytCurrentTime   = 0;
+let roomMode = 'local';  // 'local' | 'youtube'
+let ytVideoId = null;     // current YouTube video ID
+let ytPlayer = null;     // YT.Player instance
+let ytApiReady = false;
+let ytPlayerReady = false;
+let ytCurrentTime = 0;
 let activeVideoId = null; // for fixing rejoin architecture
-let ytDuration      = 0;
-let ytIsPaused      = true;
-let ytPollingTimer  = null;
-let ytApiLoadPromise  = null;
+let ytDuration = 0;
+let ytIsPaused = true;
+let ytPollingTimer = null;
+let ytApiLoadPromise = null;
 let ytPlayerInitPromise = null; // mutex — only one initYtPlayer() runs at a time
-let isSeeking         = false;  // moved to module level so ytPolling can read it
+let isSeeking = false;  // moved to module level so ytPolling can read it
 
 // ── Chat ─────────────────────────────────────────────────────────────────
 // Singleton — created once, mounted when watch screen first becomes active,
 // reset on every room leave so a fresh session starts with an empty log.
 const chat = new Chat({
-  client:      null,          // filled in by wireClientEvents after connect
+  client: null,          // filled in by wireClientEvents after connect
   myName,
   getPeerName: () => getPeerDisplayName(),
   resolveParticipantName: (participantId, fallbackName) => resolveParticipantName(participantId, fallbackName),
@@ -1090,7 +1090,7 @@ function getLanguageLabel(languageCode) {
       const displayNames = new Intl.DisplayNames([navigator.language || 'en'], { type: 'language' });
       return displayNames.of(baseCode) || normalized.toUpperCase();
     }
-  } catch {}
+  } catch { }
 
   return normalized.toUpperCase();
 }
@@ -1764,7 +1764,7 @@ async function recoverFrozenPlayback(reason = 'watchdog') {
   try {
     movieVideo.currentTime = clampVideoPosition(targetPos + 0.001);
     movieVideo.currentTime = targetPos;
-  } catch {}
+  } catch { }
 
   movieVideo.pause();
   markSyncApplied(true); // play stamp for the ensureMoviePlaying call below
@@ -1802,8 +1802,8 @@ setActiveScreen(
   screenEls.watch?.classList.contains('active')
     ? 'watch'
     : screenEls.lobby?.classList.contains('active')
-    ? 'lobby'
-    : 'landing'
+      ? 'lobby'
+      : 'landing'
 );
 
 // ═════════════════════════════════════════════════════════════════════════════
@@ -1825,7 +1825,7 @@ createRoomBtn?.addEventListener('click', async () => {
 
     const data = await res.json();
     roomCode = data.roomCode;
-    isHost   = true;
+    isHost = true;
 
     showLobby(roomCode);
     await connectAndJoin();
@@ -1848,7 +1848,7 @@ joinRoomBtn?.addEventListener('click', async () => {
     if (!res.ok) return showLandingNotice('Room not found or is already full.');
 
     roomCode = code;
-    isHost   = false;
+    isHost = false;
 
     showLobby(roomCode);
     await connectAndJoin();
@@ -1943,6 +1943,7 @@ function wireClientEvents() {
     const otherPeer = getOtherPeerSnapshot(data.peers, data.yourPeerId);
     if (otherPeer) {
       addPeerToUI(otherPeer);
+      ensureVideoCall(); // this one will trigger and ensure video call once someone joins the room.
       if (otherPeer.connectionState === 'reconnecting') {
         handleReconnect({ name: otherPeer.name });
       } else {
@@ -2005,6 +2006,7 @@ function wireClientEvents() {
     updatePeerReadyState(data.peerId, false);
     hideReconnectingUI(`${data.name} joined the room`);
     showToast(`${data.name} joined the room 🎉`);
+    ensureVideoCall(); // trigger video call when peer joined
   });
 
   client.on('peer_reconnecting', ({ name }) => {
@@ -2093,13 +2095,9 @@ function wireClientEvents() {
     // Peers receive it at slightly different times; startFrom corrects for that so
     // both enter the watch screen at the same real-world moment.
     const elapsedSec = serverTs ? Math.max(0, (Date.now() - serverTs) / 1000) : 0;
-    const startFrom  = Math.max(1, 3 - elapsedSec);
+    const startFrom = Math.max(1, 3 - elapsedSec);
 
-    try {
-      await ensureVideoCall({ force: true });
-    } catch (err) {
-      console.warn('video call start failed during countdown:', err?.message || err);
-    }
+
 
     // Seek to start position. For YouTube we must wait for the player to be
     // ready before calling seekTo — if the receiver's background init is still
@@ -2109,7 +2107,7 @@ function wireClientEvents() {
     if (roomMode === 'youtube') {
       // Wait for any in-progress player init to finish (non-blocking if already done)
       if (ytPlayerInitPromise) {
-        try { await ytPlayerInitPromise; } catch {/* init errors are handled inside */}
+        try { await ytPlayerInitPromise; } catch {/* init errors are handled inside */ }
       }
       if (ytPlayer && ytPlayerReady) {
         // Use allowSeekAhead=false so the IFrame doesn't start buffering/playing
@@ -2206,17 +2204,17 @@ function wireClientEvents() {
     updateFriendYtPreview(videoId, title);
 
     // Show own preview card immediately using thumbnail URL (no oEmbed needed)
-    const prevEl  = document.getElementById('yt-preview');
+    const prevEl = document.getElementById('yt-preview');
     const thumbEl = document.getElementById('yt-thumb');
     const titleEl = document.getElementById('yt-title');
-    const durEl   = document.getElementById('yt-dur');
+    const durEl = document.getElementById('yt-dur');
     if (thumbEl) thumbEl.src = `https://img.youtube.com/vi/${videoId}/mqdefault.jpg`;
     if (titleEl) titleEl.textContent = title || 'YouTube Video';
     if (durEl && duration > 0) durEl.textContent = formatDur(duration);
     prevEl?.classList.add('show');
 
     // Store state — player will be initialized at countdown/watch-screen time
-    ytVideoId  = videoId;
+    ytVideoId = videoId;
     ytDuration = duration || ytDuration || 0;
     ytCurrentTime = 0;
 
@@ -2377,7 +2375,7 @@ function wireVideoControls() {
   // ── Play / Pause ─────────────────────────────────────────────────────────
   playPauseBtn?.addEventListener('click', () => {
     const nowPlaying = roomMode === 'youtube' ? !ytIsPaused : !movieVideo.paused;
-    const pos        = roomMode === 'youtube' ? ytCurrentTime : movieVideo.currentTime;
+    const pos = roomMode === 'youtube' ? ytCurrentTime : movieVideo.currentTime;
     clearSyncPlaybackRate();
     if (nowPlaying) {
       if (roomMode === 'youtube') { ytPlayer?.pauseVideo(); ytIsPaused = true; }
@@ -2542,7 +2540,7 @@ function wireVideoControls() {
   readyBtn?.addEventListener('click', () => {
     const nowReady = readyBtn.dataset.ready !== 'true';
     readyBtn.dataset.ready = nowReady;
-    readyBtn.textContent   = nowReady ? "✓ Let's go!" : "I'm ready 🍿";
+    readyBtn.textContent = nowReady ? "✓ Let's go!" : "I'm ready 🍿";
     readyBtn.classList.toggle('active', nowReady);
     client.setReady(nowReady);
 
@@ -2641,21 +2639,21 @@ async function startVideoCall() {
     })
     .on('quality_changed', ({ tier }) => {
       const toastMessages = {
-        high:       null,
-        medium:     '📶 Weak network — reducing video quality to stay connected',
-        low:        '📶 Poor network — switching to low quality video',
+        high: null,
+        medium: '📶 Weak network — reducing video quality to stay connected',
+        low: '📶 Poor network — switching to low quality video',
         audio_only: '📶 Very weak network — video paused, audio only',
       };
       const badgeLabels = {
-        high:       '',
-        medium:     '📶 Medium quality',
-        low:        '📶 Low quality',
+        high: '',
+        medium: '📶 Medium quality',
+        low: '📶 Low quality',
         audio_only: '📶 Audio only',
       };
       const badgeColors = {
-        high:       '',
-        medium:     '#fbbf24',
-        low:        '#f97316',
+        high: '',
+        medium: '#fbbf24',
+        low: '#f97316',
         audio_only: '#ef4444',
       };
       const msg = toastMessages[tier];
@@ -2826,8 +2824,8 @@ function showCallUI(visible) {
 
     // Re-call play() now that the pip is visible. Browsers won't render frames
     // for a <video> that was played while inside a display:none container.
-    if (localVideo?.srcObject)  localVideo.play().catch(() => {});
-    if (remoteVideo?.srcObject) remoteVideo.play().catch(() => {});
+    if (localVideo?.srcObject) localVideo.play().catch(() => { });
+    if (remoteVideo?.srcObject) remoteVideo.play().catch(() => { });
   }
 }
 
@@ -2837,7 +2835,7 @@ function showCallUI(visible) {
  * call UI is shown or re-shown so it never drifts from reality.
  */
 function syncCallButtonState() {
-  const muted  = call?.isMuted  ?? false;
+  const muted = call?.isMuted ?? false;
   const camOff = call?.isCamOff ?? false;
 
   muteBtn?.classList.toggle('active', muted);
@@ -2923,14 +2921,14 @@ function formatFilenameWithInitials(fileName, maxNameChars = 15) {
     // No extension
     return fileName.length <= maxNameChars ? fileName : fileName.substring(0, maxNameChars) + '.....';
   }
-  
+
   const ext = fileName.substring(lastDotIndex);
   const nameWithoutExt = fileName.substring(0, lastDotIndex);
-  
+
   if (nameWithoutExt.length <= maxNameChars) {
     return fileName; // Fits without truncation
   }
-  
+
   // Truncate name and add dots before extension
   return nameWithoutExt.substring(0, maxNameChars) + '.....' + ext;
 }
@@ -2976,7 +2974,7 @@ let toastTimer = null;
 function showToast(msg, variant = 'info') {
   if (!syncToast) return;
   syncToast.textContent = msg;
-  syncToast.className   = `sync-toast show ${variant}`;
+  syncToast.className = `sync-toast show ${variant}`;
   clearTimeout(toastTimer);
   toastTimer = setTimeout(() => syncToast.classList.remove('show'), 4000);
 }
@@ -3004,7 +3002,7 @@ function formatDur(sec) {
   const h = Math.floor(sec / 3600);
   const m = Math.floor((sec % 3600) / 60);
   const s = Math.floor(sec % 60);
-  return `${h}:${String(m).padStart(2,'0')}:${String(s).padStart(2,'0')}`;
+  return `${h}:${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}`;
 }
 
 // Add keyframe for floating reactions if not already in CSS
@@ -3021,7 +3019,7 @@ function handleSeekThrottle(deltaSec) {
   if ((Date.now() - lastSeekAt) < CONTROL_DEDUPE_WINDOW_MS) return;
   lastSeekAt = Date.now();
   const cur = roomMode === 'youtube' ? ytCurrentTime : movieVideo.currentTime;
-  const dur = roomMode === 'youtube' ? ytDuration    : (movieVideo.duration || Infinity);
+  const dur = roomMode === 'youtube' ? ytDuration : (movieVideo.duration || Infinity);
   const next = Math.max(0, Math.min(isFinite(dur) ? dur : 1e9, cur + deltaSec));
   applyExplicitSeek(next);
 }
@@ -3039,7 +3037,7 @@ function loadYouTubeAPI() {
   ytApiLoadPromise = new Promise(resolve => {
     if (window.YT?.Player) { ytApiReady = true; resolve(); return; }
     const tag = document.createElement('script');
-    tag.src   = 'https://www.youtube.com/iframe_api';
+    tag.src = 'https://www.youtube.com/iframe_api';
     document.head.appendChild(tag);
     const prev = window.onYouTubeIframeAPIReady;
     window.onYouTubeIframeAPIReady = () => { ytApiReady = true; prev?.(); resolve(); };
@@ -3054,7 +3052,7 @@ function loadYouTubeAPI() {
 async function initYtPlayer(videoId) {
   // If an init is already in progress for this exact video, just await it
   if (ytPlayerInitPromise) {
-    try { await ytPlayerInitPromise; } catch {}
+    try { await ytPlayerInitPromise; } catch { }
     // After the previous init, if the player is ready and already has this
     // video loaded, nothing more to do.
     if (ytPlayer && ytPlayerReady && ytVideoId === videoId) return;
@@ -3075,9 +3073,9 @@ async function _doInitYtPlayer(videoId) {
   if (ytPlayer && ytPlayerReady && typeof ytPlayer.cueVideoById === 'function') {
     stopYtPolling();
     ytPlayer.cueVideoById({ videoId }); // cue first so onError fires before play
-    ytVideoId     = videoId;
+    ytVideoId = videoId;
     ytCurrentTime = 0;
-    ytDuration    = 0;
+    ytDuration = 0;
     // Wait for the player to report a valid duration (proves video loaded)
     // or for onError to fire (which sets ytVideoId = null via the error handler)
     let attempts = 0;
@@ -3097,7 +3095,7 @@ async function _doInitYtPlayer(videoId) {
   // Destroy any zombie player object before creating a new one
   if (ytPlayer) {
     ytPlayerReady = false;
-    try { if (typeof ytPlayer.destroy === 'function') ytPlayer.destroy(); } catch {}
+    try { if (typeof ytPlayer.destroy === 'function') ytPlayer.destroy(); } catch { }
     ytPlayer = null;
     // Re-create the placeholder div that YT.Player replaces
     const wrap = document.getElementById('yt-player-wrap');
@@ -3114,21 +3112,21 @@ async function _doInitYtPlayer(videoId) {
     ytPlayer = new window.YT.Player('yt-player', {
       videoId,
       playerVars: {
-        autoplay:        0,
-        controls:        0,  // we use our own controls
-        disablekb:       1,
-        modestbranding:  1,
-        rel:             0,
-        iv_load_policy:  3,
-        playsinline:     1,
-        enablejsapi:     1,
-        origin:          window.location.origin,
+        autoplay: 0,
+        controls: 0,  // we use our own controls
+        disablekb: 1,
+        modestbranding: 1,
+        rel: 0,
+        iv_load_policy: 3,
+        playsinline: 1,
+        enablejsapi: 1,
+        origin: window.location.origin,
       },
       events: {
         onReady(e) {
           ytPlayerReady = true;
-          ytVideoId     = videoId;
-          ytDuration    = typeof e.target.getDuration === 'function' ? e.target.getDuration() : 0;
+          ytVideoId = videoId;
+          ytDuration = typeof e.target.getDuration === 'function' ? e.target.getDuration() : 0;
           activeVideoId = videoId;
           startYtPolling(videoId);
           resolve();
@@ -3139,8 +3137,8 @@ async function _doInitYtPlayer(videoId) {
           const msg = (e.data === 101 || e.data === 150)
             ? 'This video has embedding disabled by the uploader. Try a different video.'
             : (e.data === 100)
-            ? 'Video not found or set to private.'
-            : `YouTube player error (code ${e.data})`;
+              ? 'Video not found or set to private.'
+              : `YouTube player error (code ${e.data})`;
           // Do NOT show toast/status here — the caller (processYtUrl or background
           // pre-warm) decides whether to surface the error. Showing it here would
           // display the message on the receiver's screen when the error actually
@@ -3157,7 +3155,7 @@ async function _doInitYtPlayer(videoId) {
 
 function onYtStateChange(state) {
   // YT.PlayerState: -1 unstarted | 0 ended | 1 playing | 2 paused | 3 buffering | 5 cued
-  const nowPaused  = state !== 1;
+  const nowPaused = state !== 1;
   const wasPlaying = !ytIsPaused;
   ytIsPaused = nowPaused;
   // Expose current play state so the inline auto-hide logic can query it
@@ -3205,7 +3203,7 @@ function startYtPolling(videoId = null) {
     if (d > 0 && ytDuration === 0 && (!videoId || activeVideoId === videoId)) {
       ytDuration = d;
       client?.updateDuration(d); // 🔥 important
-    } 
+    }
     else if (d > 0 && (!videoId || activeVideoId === videoId)) {
       ytDuration = d;
     }
@@ -3243,27 +3241,27 @@ async function fetchYtInfo(videoId) {
 // ── Clear YouTube selection ───────────────────────────────────────────────
 function clearYtVideoSelection() {
   ytVideoId = null; ytDuration = 0; ytCurrentTime = 0;
-  const inp  = document.getElementById('yt-url-input');
+  const inp = document.getElementById('yt-url-input');
   const prev = document.getElementById('yt-preview');
   const load = document.getElementById('yt-loading');
-  const clr  = document.getElementById('yt-clear-btn');
-  if (inp)  inp.value = '';
+  const clr = document.getElementById('yt-clear-btn');
+  if (inp) inp.value = '';
   if (prev) prev.classList.remove('show');
   if (load) load.classList.remove('show');
-  if (clr)  clr.classList.remove('show');
+  if (clr) clr.classList.remove('show');
 }
 
 // ── Mode UI switching ─────────────────────────────────────────────────────
 function setRoomModeUI(mode, sendWs = true) {
   roomMode = mode;
   const localPanel = document.getElementById('local-src-panel');
-  const ytPanel    = document.getElementById('yt-src-panel');
-  const localBtn   = document.getElementById('mode-local-btn');
-  const ytBtn      = document.getElementById('mode-yt-btn');
-  const movieEl    = document.getElementById('movie-video');
-  const ytWrap     = document.getElementById('yt-player-wrap');
-  const backBtn    = document.getElementById('watch-back-btn');
-  window._ytMode   = (mode === 'youtube');
+  const ytPanel = document.getElementById('yt-src-panel');
+  const localBtn = document.getElementById('mode-local-btn');
+  const ytBtn = document.getElementById('mode-yt-btn');
+  const movieEl = document.getElementById('movie-video');
+  const ytWrap = document.getElementById('yt-player-wrap');
+  const backBtn = document.getElementById('watch-back-btn');
+  window._ytMode = (mode === 'youtube');
 
   if (mode === 'youtube') {
     localPanel?.classList.add('hidden');
@@ -3271,7 +3269,7 @@ function setRoomModeUI(mode, sendWs = true) {
     localBtn?.classList.remove('active');
     ytBtn?.classList.add('active');
     if (movieEl) movieEl.style.display = 'none';
-    if (ytWrap)  ytWrap.classList.add('active');
+    if (ytWrap) ytWrap.classList.add('active');
     if (backBtn) backBtn.textContent = '← Change video';
     loadYouTubeAPI(); // pre-fetch API script while user is still in lobby
   } else {
@@ -3280,7 +3278,7 @@ function setRoomModeUI(mode, sendWs = true) {
     localBtn?.classList.add('active');
     ytBtn?.classList.remove('active');
     if (movieEl) movieEl.style.removeProperty('display');
-    if (ytWrap)  ytWrap.classList.remove('active');
+    if (ytWrap) ytWrap.classList.remove('active');
     if (backBtn) backBtn.textContent = '← Change file';
   }
 
@@ -3331,10 +3329,10 @@ function updateFriendYtPreview(videoId, title) {
   }
   const thumbEl = document.getElementById('friend-yt-thumb');
   const titleEl = document.getElementById('friend-yt-title');
-  const prevEl  = document.getElementById('friend-yt-preview');
+  const prevEl = document.getElementById('friend-yt-preview');
   if (thumbEl) thumbEl.src = `https://img.youtube.com/vi/${videoId}/mqdefault.jpg`;
   if (titleEl) titleEl.textContent = title || 'YouTube Video';
-  if (prevEl)  prevEl.classList.add('show');
+  if (prevEl) prevEl.classList.add('show');
 }
 
 // ── Wire lobby toggle + URL input ─────────────────────────────────────────
@@ -3343,7 +3341,7 @@ function wireYouTubeLobby() {
   if (ytLobbyWired) return;
   ytLobbyWired = true;
 
-  const toggle  = document.getElementById('mode-toggle');
+  const toggle = document.getElementById('mode-toggle');
   const ytInput = document.getElementById('yt-url-input');
   const ytClear = document.getElementById('yt-clear-btn');
 
@@ -3408,12 +3406,12 @@ function wireYouTubeLobby() {
 // ── Process a YouTube video ID: fetch info → create player → broadcast ────
 async function processYtUrl(videoId, { broadcast = true } = {}) {
   if (videoId === ytVideoId && ytPlayerReady) return; // already loaded
-  const loadEl  = document.getElementById('yt-loading');
-  const prevEl  = document.getElementById('yt-preview');
+  const loadEl = document.getElementById('yt-loading');
+  const prevEl = document.getElementById('yt-preview');
   const thumbEl = document.getElementById('yt-thumb');
   const titleEl = document.getElementById('yt-title');
-  const durEl   = document.getElementById('yt-dur');
-  const clrBtn  = document.getElementById('yt-clear-btn');
+  const durEl = document.getElementById('yt-dur');
+  const clrBtn = document.getElementById('yt-clear-btn');
 
   prevEl?.classList.remove('show');
   if (loadEl) { loadEl.textContent = 'Fetching video info…'; loadEl.classList.add('show'); }
@@ -3424,7 +3422,7 @@ async function processYtUrl(videoId, { broadcast = true } = {}) {
 
     if (thumbEl) thumbEl.src = info.thumbnail_url || `https://img.youtube.com/vi/${videoId}/mqdefault.jpg`;
     if (titleEl) titleEl.textContent = info.title || 'YouTube Video';
-    if (durEl)   durEl.textContent   = '';
+    if (durEl) durEl.textContent = '';
     prevEl?.classList.add('show');
     ytVideoId = videoId;
 

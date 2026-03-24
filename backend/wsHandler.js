@@ -55,27 +55,27 @@ function roomSnapshot(room, forPeerId, { rejoined = false } = {}) {
   const peers = [];
   room.peers.forEach(p => {
     peers.push({
-      peerId:       p.peerId,
+      peerId: p.peerId,
       participantId: p.participantId,
-      name:         p.name,
-      isHost:       p.isHost,
+      name: p.name,
+      isHost: p.isHost,
       fileDuration: p.fileDuration,
-      fileName:     p.fileName || null,
-      isReady:      p.isReady,
-      isCameraOn:   p.isCameraOn !== false,
-      isMicOn:      p.isMicOn !== false,
+      fileName: p.fileName || null,
+      isReady: p.isReady,
+      isCameraOn: p.isCameraOn !== false,
+      isMicOn: p.isMicOn !== false,
       connectionState: p.connectionState || 'online',
     });
   });
   return {
-    roomCode:      room.code,
+    roomCode: room.code,
     peers,
-    playState:     room.playState,
-    masterId:      room.playState.masterId,
-    yourPeerId:    forPeerId,
-    roomMode:      room.youtubeVideoId ? 'youtube' : 'local',
+    playState: room.playState,
+    masterId: room.playState.masterId,
+    yourPeerId: forPeerId,
+    roomMode: room.youtubeVideoId ? 'youtube' : 'local',
     youtubeVideoId: room.youtubeVideoId || null,
-    youtubeTitle:  room.youtubeTitle   || null,
+    youtubeTitle: room.youtubeTitle || null,
     rejoined,
   };
 }
@@ -119,7 +119,7 @@ function finalizePeerDeparture(roomManager, room, participantId, { reason = 'lef
 
 // ── Main connection handler ───────────────────────────────────────────────
 function handleConnection(ws, req, roomManager) {
-  let myRoom   = null;
+  let myRoom = null;
   let myPeerId = null;
   let didExplicitLeave = false;
 
@@ -145,502 +145,501 @@ function handleConnection(ws, req, roomManager) {
 
       const { type } = msg;
 
-    // ── JOIN ──────────────────────────────────────────────────────────────
-    if (type === 'join') {
-      const room = roomManager.findByCode(msg.roomCode?.toUpperCase());
-      if (!room) return send(ws, 'error', { message: 'Room not found' });
-      getPeerReconnectGraceMs(room);
+      // ── JOIN ──────────────────────────────────────────────────────────────
+      if (type === 'join') {
+        const room = roomManager.findByCode(msg.roomCode?.toUpperCase());
+        if (!room) return send(ws, 'error', { message: 'Room not found' });
+        getPeerReconnectGraceMs(room);
 
-      const participantId = String(msg.participantId || uuidv4());
-      const existingPeer = roomManager.getPeer(room, participantId);
-      if (!existingPeer && room.peers.size >= 2) {
-        return send(ws, 'error', { message: 'Room full' });
-      }
-
-      myPeerId = participantId;
-      myRoom   = room;
-      didExplicitLeave = false;
-
-      if (existingPeer) {
-        const oldWs = existingPeer.ws;
-        const priorState = existingPeer.connectionState;
-        const isSocketReplacement = !!oldWs && oldWs !== ws;
-        const reconnectedPeer = roomManager.reconnectPeer(room, participantId, ws, {
-          name: msg.name || existingPeer.name || 'Guest',
-          isHost: existingPeer.isHost || !!msg.isHost,
-        });
-        send(ws, 'joined', roomSnapshot(room, myPeerId, { rejoined: true }));
-        if (isSocketReplacement) {
-          try { oldWs.close(4000, 'session-replaced'); } catch {}
+        const participantId = String(msg.participantId || uuidv4());
+        const existingPeer = roomManager.getPeer(room, participantId);
+        if (!existingPeer && room.peers.size >= 2) {
+          return send(ws, 'error', { message: 'Room full' });
         }
-        if (priorState === 'reconnecting' || isSocketReplacement) {
-          broadcast(room, 'peer_reconnected', {
+
+        myPeerId = participantId;
+        myRoom = room;
+        didExplicitLeave = false;
+
+        if (existingPeer) {
+          const oldWs = existingPeer.ws;
+          const priorState = existingPeer.connectionState;
+          const isSocketReplacement = !!oldWs && oldWs !== ws;
+          const reconnectedPeer = roomManager.reconnectPeer(room, participantId, ws, {
+            name: msg.name || existingPeer.name || 'Guest',
+            isHost: existingPeer.isHost || !!msg.isHost,
+          });
+          send(ws, 'joined', roomSnapshot(room, myPeerId, { rejoined: true }));
+          if (isSocketReplacement) {
+            try { oldWs.close(4000, 'session-replaced'); } catch { }
+          }
+          if (priorState === 'reconnecting' || isSocketReplacement) {
+            broadcast(room, 'peer_reconnected', {
+              peerId: myPeerId,
+              participantId: myPeerId,
+              name: reconnectedPeer?.name || msg.name || existingPeer.name || 'Guest',
+              isHost: reconnectedPeer?.isHost || false,
+              isCameraOn: reconnectedPeer?.isCameraOn !== false,
+              isMicOn: reconnectedPeer?.isMicOn !== false,
+              connectionState: 'online',
+            }, myPeerId);
+          }
+          console.log(`[WS] ${msg.name || existingPeer.name || 'Guest'} rejoined ${room.code}`);
+        } else {
+          roomManager.addPeer(room, ws, myPeerId, msg.name || 'Guest', !!msg.isHost);
+          send(ws, 'joined', roomSnapshot(room, myPeerId));
+          broadcast(room, 'peer_joined', {
             peerId: myPeerId,
             participantId: myPeerId,
-            name: reconnectedPeer?.name || msg.name || existingPeer.name || 'Guest',
-            isHost: reconnectedPeer?.isHost || false,
-            isCameraOn: reconnectedPeer?.isCameraOn !== false,
-            isMicOn: reconnectedPeer?.isMicOn !== false,
-            connectionState: 'online',
+            name: msg.name || 'Guest',
+            isHost: !!msg.isHost,
+            isCameraOn: true,
+            isMicOn: true,
           }, myPeerId);
+          console.log(`[WS] ${msg.name} joined ${room.code}`);
         }
-        console.log(`[WS] ${msg.name || existingPeer.name || 'Guest'} rejoined ${room.code}`);
-      } else {
-        roomManager.addPeer(room, ws, myPeerId, msg.name || 'Guest', !!msg.isHost);
-        send(ws, 'joined', roomSnapshot(room, myPeerId));
-        broadcast(room, 'peer_joined', {
+        return;
+      }
+
+      if (!myRoom || !myPeerId) return send(ws, 'error', { message: 'Not in a room' });
+
+      if (type === 'leave_room') {
+        const peer = roomManager.getPeer(myRoom, myPeerId);
+        didExplicitLeave = true;
+        finalizePeerDeparture(roomManager, myRoom, myPeerId, { reason: 'explicit_leave' });
+        console.log(`[WS] ${peer?.name || myPeerId} left ${myRoom.code}`);
+        myRoom = null;
+        myPeerId = null;
+        return;
+      }
+
+      if (type === 'update_name') {
+        const peer = myRoom.peers.get(myPeerId);
+        if (!peer) return;
+        const nextName = String(msg.name || '').replace(/\s+/g, ' ').trim().slice(0, 32) || peer.name || 'Guest';
+        peer.name = nextName;
+        broadcast(myRoom, 'peer_name_updated', {
           peerId: myPeerId,
           participantId: myPeerId,
-          name:   msg.name || 'Guest',
-          isHost: !!msg.isHost,
-          isCameraOn: true,
-          isMicOn: true,
+          name: nextName,
         }, myPeerId);
-        console.log(`[WS] ${msg.name} joined ${room.code}`);
-      }
-      return;
-    }
-
-    if (!myRoom || !myPeerId) return send(ws, 'error', { message: 'Not in a room' });
-
-    if (type === 'leave_room') {
-      const peer = roomManager.getPeer(myRoom, myPeerId);
-      didExplicitLeave = true;
-      finalizePeerDeparture(roomManager, myRoom, myPeerId, { reason: 'explicit_leave' });
-      console.log(`[WS] ${peer?.name || myPeerId} left ${myRoom.code}`);
-      myRoom = null;
-      myPeerId = null;
-      return;
-    }
-
-    if (type === 'update_name') {
-      const peer = myRoom.peers.get(myPeerId);
-      if (!peer) return;
-      const nextName = String(msg.name || '').replace(/\s+/g, ' ').trim().slice(0, 32) || peer.name || 'Guest';
-      peer.name = nextName;
-      broadcast(myRoom, 'peer_name_updated', {
-        peerId: myPeerId,
-        participantId: myPeerId,
-        name: nextName,
-      }, myPeerId);
-      console.log(`[Room] ${myRoom.code} rename ${myPeerId.slice(0, 8)} -> ${nextName}`);
-      return;
-    }
-
-    // ── FILE_READY ────────────────────────────────────────────────────────
-    if (type === 'file_ready') {
-  const peer = myRoom.peers.get(myPeerId);
-
-  // 1. Store incoming data
-  peer.fileDuration = msg.durationSec ?? 0;
-  peer.fileName     = msg.fileName || null;
-  peer.hasVideo     = msg.hasVideo || false; // ✅ NEW
-
-  // 2. Inform the other peer
-  broadcast(myRoom, 'peer_file_ready', {
-    peerId:      myPeerId,
-    durationSec: peer.fileDuration,
-    fileName:    peer.fileName,
-  }, myPeerId);
-
-  const allPeers = [...myRoom.peers.values()];
-
-  if (allPeers.length === 2) {
-    const [a, b] = allPeers;
-
-    // 🔴 YOUTUBE MODE (decoupled)
-    if (myRoom.youtubeVideoId) {
-      if (a.hasVideo && b.hasVideo && !myRoom.readyBroadcasted) {
-        myRoom.readyBroadcasted = true; // ✅ prevent duplicate triggers
-
-        broadcast(myRoom, 'duration_check', {
-          match: true,
-          diff: 0,
-          durations: {
-            [a.peerId]: a.fileDuration,
-            [b.peerId]: b.fileDuration,
-          },
-        });
-
-        console.log(`[Sync] ${myRoom.code} YouTube acknowledged by both`);
-      }
-    }
-
-    // 🟢 LOCAL FILE MODE (keep strict check)
-    else if (a.fileDuration !== null && b.fileDuration !== null) {
-      const diff  = Math.abs(a.fileDuration - b.fileDuration);
-      const match = diff <= DURATION_MATCH_TOLERANCE_SEC;
-
-      broadcast(myRoom, 'duration_check', {
-        match,
-        diff,
-        durations: {
-          [a.peerId]: a.fileDuration,
-          [b.peerId]: b.fileDuration,
-        },
-      });
-
-      console.log(
-        `[Sync] ${myRoom.code} duration check: ${
-          match ? '✓ match' : `✗ drift ${diff}s`
-        }`
-      );
-    }
-  }
-
-  return;
-}
-
-    // ── READY_TOGGLE ──────────────────────────────────────────────────────
-    if (type === 'ready_toggle') {
-      const peer  = myRoom.peers.get(myPeerId);
-      peer.isReady = !!msg.isReady;
-
-      // BUG FIX: exclude the sender from peer_ready broadcast.
-      // Sending it back to the sender caused the peer_ready handler to fire
-      // for the sender's own peerId. The `peerId === client.peerId` guard in
-      // the client caught it, but only AFTER updatePeerReadyState already ran
-      // (updating the friend's indicator with the sender's own state) and
-      // in edge cases where the guard check raced with client.peerId being set,
-      // it let the toast+pulse logic run — creating a feedback loop where the
-      // sender's own ready event triggered the "peer wants you" toast, which
-      // confused the UI into thinking the ready state needed to toggle again.
-      broadcast(myRoom, 'peer_ready', { peerId: myPeerId, isReady: peer.isReady }, myPeerId);
-
-      const allPeers = [...myRoom.peers.values()];
-      if (allPeers.length === 2 && allPeers.every(p => p.isReady)) {
-        const initialMasterId = allPeers[0].peerId;
-        myRoom.playState = {
-          playing: false,
-          positionSec: 0,
-          lastUpdatedAt: Date.now(),
-          masterId: initialMasterId,
-        };
-        broadcast(myRoom, 'countdown_start', { positionSec: 0, serverTs: Date.now() });
-        console.log(`[Sync] ${myRoom.code} both ready → countdown (master: ${initialMasterId.slice(0,8)})`);
-      }
-      return;
-    }
-
-    // ── PLAY_PAUSE ────────────────────────────────────────────────────────
-    // BUG FIX: old dedup checked only time (300ms window). This caused two
-    // problems:
-    //   1. A legitimate fast double-tap (e.g. pause then play 400ms later)
-    //      was sometimes swallowed.
-    //   2. When the OTHER peer mirrored the command and its echo arrived back
-    //      within 300ms it was wrongly dropped, leaving one peer out of sync.
-    //
-    // New approach: ignore a command only if it carries the EXACT same
-    // (playing, rounded position) within a tight 80ms window. This catches
-    // true network duplicates without eating legitimate commands.
-    if (type === 'play_pause') {
-      const now = Date.now();
-      const roundedPos = Math.round((msg.positionSec ?? 0) * 10); // 0.1s resolution
-      const isDuplicate =
-        now - lastPlayPauseAt < PLAY_PAUSE_DEDUP_MS &&
-        msg.playing === lastPlayPausePlaying &&
-        roundedPos  === lastPlayPausePos;
-
-      if (isDuplicate) {
-        console.log(`[Sync] ${myRoom.code} dedup play_pause from ${myPeerId.slice(0,8)}`);
+        console.log(`[Room] ${myRoom.code} rename ${myPeerId.slice(0, 8)} -> ${nextName}`);
         return;
       }
 
-      lastPlayPauseAt      = now;
-      lastPlayPausePlaying = msg.playing;
-      lastPlayPausePos     = roundedPos;
+      // ── FILE_READY ────────────────────────────────────────────────────────
+      if (type === 'file_ready') {
+        const peer = myRoom.peers.get(myPeerId);
 
-      const ps = myRoom.playState;
-      ps.playing       = !!msg.playing;
-      ps.positionSec   = msg.positionSec ?? roomManager.currentPosition(myRoom);
-      ps.lastUpdatedAt = now;
-      ps.masterId      = myPeerId;
+        // 1. Store incoming data
+        peer.fileDuration = msg.durationSec ?? 0;
+        peer.fileName = msg.fileName || null;
+        peer.hasVideo = msg.hasVideo || false; // ✅ NEW
 
-      // BUG FIX: reset nudge cooldown when playback state changes so the
-      // non-master gets a clean slate after every play/pause.
-      nudgeCooldownUntil = 0;
+        // 2. Inform the other peer
+        broadcast(myRoom, 'peer_file_ready', {
+          peerId: myPeerId,
+          durationSec: peer.fileDuration,
+          fileName: peer.fileName,
+        }, myPeerId);
 
-      broadcast(myRoom, 'play_pause', {
-        playing:     ps.playing,
-        positionSec: ps.positionSec,
-        masterId:    myPeerId,
-        serverTs:    now,
-      }, myPeerId);
+        const allPeers = [...myRoom.peers.values()];
 
-      console.log(`[Sync] ${myRoom.code} ${ps.playing ? '▶' : '⏸'} @ ${ps.positionSec.toFixed(1)}s (master: ${myPeerId.slice(0,8)})`);
-      return;
-    }
+        if (allPeers.length === 2) {
+          const [a, b] = allPeers;
 
-    // ── SEEK ─────────────────────────────────────────────────────────────
-    if (type === 'seek') {
-      const ps = myRoom.playState;
-      ps.positionSec   = msg.positionSec;
-      ps.lastUpdatedAt = Date.now();
-      ps.masterId      = myPeerId;
+          // 🔴 YOUTUBE MODE (decoupled)
+          if (myRoom.youtubeVideoId) {
+            if (a.hasVideo && b.hasVideo && !myRoom.readyBroadcasted) {
+              myRoom.readyBroadcasted = true; // ✅ prevent duplicate triggers
 
-      // Room-level cooldown: any seek from ANY peer blocks ALL nudges for
-      // ROOM_SEEK_COOLDOWN_MS. This breaks the dual-master seek storm where
-      // peer A seeks → B gets nudged before landing the seek → B seeks →
-      // A gets nudged → loop. Storing it on myRoom means every peer's
-      // sync_check handler reads the same shared value.
-      myRoom.seekCooldownUntil = Date.now() + ROOM_SEEK_COOLDOWN_MS;
-      nudgeCooldownUntil       = Date.now() + ROOM_SEEK_COOLDOWN_MS;
+              broadcast(myRoom, 'duration_check', {
+                match: true,
+                diff: 0,
+                durations: {
+                  [a.peerId]: a.fileDuration,
+                  [b.peerId]: b.fileDuration,
+                },
+              });
 
-      broadcast(myRoom, 'seek', {
-        positionSec: msg.positionSec,
-        masterId:    myPeerId,
-        serverTs:    Date.now(),
-      }, myPeerId);
+              console.log(`[Sync] ${myRoom.code} YouTube acknowledged by both`);
+            }
+          }
 
-      console.log(`[Sync] ${myRoom.code} seek → ${msg.positionSec.toFixed(1)}s`);
-      return;
-    }
+          // 🟢 LOCAL FILE MODE (keep strict check)
+          else if (a.fileDuration !== null && b.fileDuration !== null) {
+            const diff = Math.abs(a.fileDuration - b.fileDuration);
+            const match = diff <= DURATION_MATCH_TOLERANCE_SEC;
 
-    // ── SYNC_CHECK ────────────────────────────────────────────────────────
-    // BUG FIX: three problems fixed here:
-    //
-    // 1. NUDGE FEEDBACK LOOP — old code nudged on every sync_check that
-    //    showed drift. The nudged client seeks, but reports stale position
-    //    for a few frames, so 4-6 more nudges fire before it settles. Each
-    //    nudge is a fresh seek → the client keeps jumping. Fix: per-connection
-    //    nudgeCooldown (1.5s after each nudge or seek).
-    //
-    // 2. MASTER CLOCK DRIFT — the master sends sync_checks too, and the old
-    //    code used those to update the server clock. But if the master is
-    //    paused or seeking, its reported position was used as authoritative
-    //    even when stale. Now we only update server clock from master when
-    //    playing, and keep our own extrapolation when paused.
-    //
-    // 3. POST-SEEK PHANTOM DRIFT — a seek sets server positionSec correctly,
-    //    but if playing=true, currentPosition() extrapolates from lastUpdatedAt
-    //    which was just reset. Non-master hasn't landed the seek yet → it
-    //    reports old pos → drift. Fixed by nudgeCooldown after seek.
-    if (type === 'sync_check') {
-      if (typeof msg.positionSec !== 'number') return;
+            broadcast(myRoom, 'duration_check', {
+              match,
+              diff,
+              durations: {
+                [a.peerId]: a.fileDuration,
+                [b.peerId]: b.fileDuration,
+              },
+            });
 
-      if (myPeerId === myRoom.playState.masterId) {
-        // Master clock update: always apply when playing so the server clock
-        // never freezes. This is independent of nudge cooldowns — cooldowns
-        // only control whether WE send nudges to others, not whether we accept
-        // authoritative clock updates from the master.
-        if (myRoom.playState.playing) {
-          myRoom.playState.positionSec   = msg.positionSec;
-          myRoom.playState.lastUpdatedAt = Date.now();
+            console.log(
+              `[Sync] ${myRoom.code} duration check: ${match ? '✓ match' : `✗ drift ${diff}s`
+              }`
+            );
+          }
+        }
+
+        return;
+      }
+
+      // ── READY_TOGGLE ──────────────────────────────────────────────────────
+      if (type === 'ready_toggle') {
+        const peer = myRoom.peers.get(myPeerId);
+        peer.isReady = !!msg.isReady;
+
+        // BUG FIX: exclude the sender from peer_ready broadcast.
+        // Sending it back to the sender caused the peer_ready handler to fire
+        // for the sender's own peerId. The `peerId === client.peerId` guard in
+        // the client caught it, but only AFTER updatePeerReadyState already ran
+        // (updating the friend's indicator with the sender's own state) and
+        // in edge cases where the guard check raced with client.peerId being set,
+        // it let the toast+pulse logic run — creating a feedback loop where the
+        // sender's own ready event triggered the "peer wants you" toast, which
+        // confused the UI into thinking the ready state needed to toggle again.
+        broadcast(myRoom, 'peer_ready', { peerId: myPeerId, isReady: peer.isReady }, myPeerId);
+
+        const allPeers = [...myRoom.peers.values()];
+        if (allPeers.length === 2 && allPeers.every(p => p.isReady)) {
+          const initialMasterId = allPeers[0].peerId;
+          myRoom.playState = {
+            playing: false,
+            positionSec: 0,
+            lastUpdatedAt: Date.now(),
+            masterId: initialMasterId,
+          };
+          broadcast(myRoom, 'countdown_start', { positionSec: 0, serverTs: Date.now() });
+          console.log(`[Sync] ${myRoom.code} both ready → countdown (master: ${initialMasterId.slice(0, 8)})`);
         }
         return;
       }
 
-      // Non-master: check if we're in a cooldown (seek or recent nudge).
-      // Also check the room-level seekCooldownUntil which is set by ANY peer's
-      // seek — this breaks the seek storm where both peers seek simultaneously.
-      const now = Date.now();
-      const roomSeekCooldown = myRoom.seekCooldownUntil || 0;
-      if (now < nudgeCooldownUntil || now < roomSeekCooldown) return;
+      // ── PLAY_PAUSE ────────────────────────────────────────────────────────
+      // BUG FIX: old dedup checked only time (300ms window). This caused two
+      // problems:
+      //   1. A legitimate fast double-tap (e.g. pause then play 400ms later)
+      //      was sometimes swallowed.
+      //   2. When the OTHER peer mirrored the command and its echo arrived back
+      //      within 300ms it was wrongly dropped, leaving one peer out of sync.
+      //
+      // New approach: ignore a command only if it carries the EXACT same
+      // (playing, rounded position) within a tight 80ms window. This catches
+      // true network duplicates without eating legitimate commands.
+      if (type === 'play_pause') {
+        const now = Date.now();
+        const roundedPos = Math.round((msg.positionSec ?? 0) * 10); // 0.1s resolution
+        const isDuplicate =
+          now - lastPlayPauseAt < PLAY_PAUSE_DEDUP_MS &&
+          msg.playing === lastPlayPausePlaying &&
+          roundedPos === lastPlayPausePos;
 
-      const serverPos = roomManager.currentPosition(myRoom);
-      const drift     = Math.abs(msg.positionSec - serverPos);
+        if (isDuplicate) {
+          console.log(`[Sync] ${myRoom.code} dedup play_pause from ${myPeerId.slice(0, 8)}`);
+          return;
+        }
 
-      if (drift > SYNC_TOLERANCE_SEC) {
-        // Set per-connection cooldown before sending nudge so back-to-back
-        // sync_checks from the same non-master don't fire multiple nudges.
-        // Keep this tight (1.5s) so the non-master resumes reporting quickly
-        // and the server clock (fed by the master) stays accurate.
-        // Do NOT set myRoom.seekCooldownUntil here — that would also block
-        // the master's clock updates, causing the frozen-clock nudge storm.
-        nudgeCooldownUntil = now + 1500;
+        lastPlayPauseAt = now;
+        lastPlayPausePlaying = msg.playing;
+        lastPlayPausePos = roundedPos;
 
-        send(ws, 'sync_nudge', {
-          positionSec: serverPos,
-          drift,
-          playing:  myRoom.playState.playing,
+        const ps = myRoom.playState;
+        ps.playing = !!msg.playing;
+        ps.positionSec = msg.positionSec ?? roomManager.currentPosition(myRoom);
+        ps.lastUpdatedAt = now;
+        ps.masterId = myPeerId;
+
+        // BUG FIX: reset nudge cooldown when playback state changes so the
+        // non-master gets a clean slate after every play/pause.
+        nudgeCooldownUntil = 0;
+
+        broadcast(myRoom, 'play_pause', {
+          playing: ps.playing,
+          positionSec: ps.positionSec,
+          masterId: myPeerId,
           serverTs: now,
-          masterId: myRoom.playState.masterId,
-        });
+        }, myPeerId);
 
-        const driftWarn = drift > 10 ? ' [LARGE DRIFT!]' : '';
-        console.log(`[Sync] ${myRoom.code} nudging ${myPeerId.slice(0,8)} drift=${drift.toFixed(2)}s (peer=${msg.positionSec.toFixed(1)}s server=${serverPos.toFixed(1)}s)${driftWarn}`);
+        console.log(`[Sync] ${myRoom.code} ${ps.playing ? '▶' : '⏸'} @ ${ps.positionSec.toFixed(1)}s (master: ${myPeerId.slice(0, 8)})`);
+        return;
       }
-      return;
-    }
 
-    // ── REACTION ─────────────────────────────────────────────────────────
-    if (type === 'reaction') {
-      broadcast(myRoom, 'reaction', { emoji: msg.emoji, fromPeerId: myPeerId }, myPeerId);
-      return;
-    }
+      // ── SEEK ─────────────────────────────────────────────────────────────
+      if (type === 'seek') {
+        const ps = myRoom.playState;
+        ps.positionSec = msg.positionSec;
+        ps.lastUpdatedAt = Date.now();
+        ps.masterId = myPeerId;
 
-    // ── CHAT_MESSAGE ──────────────────────────────────────────────────────
-    // Room-isolated: only relayed to the OTHER peer in this room.
-    // We broadcast including the sender's own peerId so the receiver can
-    // distinguish self vs other messages if needed, but the server never
-    // sends it BACK to the sender — they already rendered it optimistically.
-    if (type === 'chat_message') {
-      const peer = myRoom.peers.get(myPeerId);
-      // Sanitize on the server side too — strip any HTML/control characters.
-      const rawText = String(msg.text || '').trim();
-      if (!rawText) return; // reject empty messages
-      // Hard cap per message — prevents someone sending a 10MB string.
-      const safeText = rawText.slice(0, 500);
-      const payload = {
-        messageId:   msg.messageId || uuidv4(), // dedup key the client can use
-        fromPeerId:  myPeerId,
-        participantId: myPeerId,
-        senderName:  peer?.name || 'Guest',
-        text:        safeText,
-        timestamp:   Date.now(),
-      };
-      // Relay only to the OTHER peer — sender already rendered optimistically.
-      broadcast(myRoom, 'chat_message', payload, myPeerId);
-      console.log(`[Chat] ${myRoom.code} ${peer?.name}: ${safeText.slice(0,40)}`);
-      return;
-    }
+        // Room-level cooldown: any seek from ANY peer blocks ALL nudges for
+        // ROOM_SEEK_COOLDOWN_MS. This breaks the dual-master seek storm where
+        // peer A seeks → B gets nudged before landing the seek → B seeks →
+        // A gets nudged → loop. Storing it on myRoom means every peer's
+        // sync_check handler reads the same shared value.
+        myRoom.seekCooldownUntil = Date.now() + ROOM_SEEK_COOLDOWN_MS;
+        nudgeCooldownUntil = Date.now() + ROOM_SEEK_COOLDOWN_MS;
 
-    // ── RETURN_TO_LOBBY ───────────────────────────────────────────────────
-    if (type === 'return_to_lobby') {
-      // Reset ALL peers' isReady and fileDuration — both sides need to
-      // re-confirm before the next session can start.
-      myRoom.peers.forEach(p => { p.isReady = false; p.fileDuration = null; });
-      const peer = myRoom.peers.get(myPeerId);
-      myRoom.playState.playing     = false;
-      myRoom.playState.positionSec = 0;
-      myRoom.playState.lastUpdatedAt = Date.now();
-      // Clear YouTube state so the room snapshot sent to any future joiner
-      // does not restore a stale video from a previous session in this room.
-      myRoom.youtubeVideoId = null;
-      myRoom.youtubeTitle   = null;
-      nudgeCooldownUntil = 0;
-      myRoom.seekCooldownUntil = 0;
+        broadcast(myRoom, 'seek', {
+          positionSec: msg.positionSec,
+          masterId: myPeerId,
+          serverTs: Date.now(),
+        }, myPeerId);
 
-      broadcast(myRoom, 'return_to_lobby', {
-        peerId: myPeerId,
-        name: peer?.name || 'Your friend',
-      }, myPeerId);
-      // Notify the OTHER peer that this peer's ready state is now false.
-      // Exclude the sender — they already know they pressed back.
-      broadcast(myRoom, 'peer_ready', { peerId: myPeerId, isReady: false }, myPeerId);
-      console.log(`[Sync] ${myRoom.code} returning both peers to lobby`);
-      return;
-    }
-
-    // ── MODE_CHANGE ───────────────────────────────────────────────────────
-    // Either peer can switch the room between local-file and YouTube mode.
-    // This resets all ready / file state so both have to re-confirm.
-    if (type === 'mode_change') {
-      const peer = myRoom.peers.get(myPeerId);
-      myRoom.peers.forEach(p => { p.isReady = false; p.fileDuration = null; p.fileName = null; });
-      myRoom.playState.playing      = false;
-      myRoom.playState.positionSec  = 0;
-      myRoom.playState.lastUpdatedAt = Date.now();
-      myRoom.youtubeVideoId = null;
-      myRoom.youtubeTitle   = null;
-      nudgeCooldownUntil = 0;
-      // Broadcast to ALL peers so both UIs update (sender gets their own echo back)
-      broadcast(myRoom, 'peer_mode_change', {
-        peerId: myPeerId,
-        name:   peer?.name || 'Your friend',
-        mode:   msg.mode === 'youtube' ? 'youtube' : 'local',
-      });
-      console.log(`[Mode] ${myRoom.code} → ${msg.mode} (${peer?.name})`);
-      return;
-    }
-
-    //--update duration------
-    if (type === 'update_duration') {
-  const peer = myRoom.peers.get(myPeerId);
-  if (!peer) return;
-
-  peer.fileDuration = msg.durationSec ?? 0;
-
-  const allPeers = [...myRoom.peers.values()];
-
-  // 🔍 Soft validation (YouTube only)
-  if (myRoom.youtubeVideoId && allPeers.length === 2) {
-    const [a, b] = allPeers;
-
-    if (a.fileDuration > 0 && b.fileDuration > 0) {
-      const diff = Math.abs(a.fileDuration - b.fileDuration);
-
-      if (diff > 2) {
-        console.warn(
-          `[Sync Warning] Room ${myRoom.code}: Possible YouTube desync (${diff}s)`
-        );
+        console.log(`[Sync] ${myRoom.code} seek → ${msg.positionSec.toFixed(1)}s`);
+        return;
       }
-    }
-  }
 
-  // 📡 Notify peer
-  broadcast(myRoom, 'peer_duration_updated', {
-    peerId: myPeerId,
-    durationSec: peer.fileDuration
-  }, myPeerId);
+      // ── SYNC_CHECK ────────────────────────────────────────────────────────
+      // BUG FIX: three problems fixed here:
+      //
+      // 1. NUDGE FEEDBACK LOOP — old code nudged on every sync_check that
+      //    showed drift. The nudged client seeks, but reports stale position
+      //    for a few frames, so 4-6 more nudges fire before it settles. Each
+      //    nudge is a fresh seek → the client keeps jumping. Fix: per-connection
+      //    nudgeCooldown (1.5s after each nudge or seek).
+      //
+      // 2. MASTER CLOCK DRIFT — the master sends sync_checks too, and the old
+      //    code used those to update the server clock. But if the master is
+      //    paused or seeking, its reported position was used as authoritative
+      //    even when stale. Now we only update server clock from master when
+      //    playing, and keep our own extrapolation when paused.
+      //
+      // 3. POST-SEEK PHANTOM DRIFT — a seek sets server positionSec correctly,
+      //    but if playing=true, currentPosition() extrapolates from lastUpdatedAt
+      //    which was just reset. Non-master hasn't landed the seek yet → it
+      //    reports old pos → drift. Fixed by nudgeCooldown after seek.
+      if (type === 'sync_check') {
+        if (typeof msg.positionSec !== 'number') return;
 
-  return;
-}
+        if (myPeerId === myRoom.playState.masterId) {
+          // Master clock update: always apply when playing so the server clock
+          // never freezes. This is independent of nudge cooldowns — cooldowns
+          // only control whether WE send nudges to others, not whether we accept
+          // authoritative clock updates from the master.
+          if (myRoom.playState.playing) {
+            myRoom.playState.positionSec = msg.positionSec;
+            myRoom.playState.lastUpdatedAt = Date.now();
+          }
+          return;
+        }
 
-    // ── YOUTUBE_LINK ──────────────────────────────────────────────────────
-    // Either peer can paste the link; server stores it and fans it out so
-    // BOTH clients receive peer_youtube_link and load the same video.
-  if (type === 'youtube_link') {
-    const peer = myRoom.peers.get(myPeerId);
+        // Non-master: check if we're in a cooldown (seek or recent nudge).
+        // Also check the room-level seekCooldownUntil which is set by ANY peer's
+        // seek — this breaks the seek storm where both peers seek simultaneously.
+        const now = Date.now();
+        const roomSeekCooldown = myRoom.seekCooldownUntil || 0;
+        if (now < nudgeCooldownUntil || now < roomSeekCooldown) return;
 
-    // 1. Store new video
-    myRoom.youtubeVideoId = msg.videoId || null;
-    myRoom.youtubeTitle   = msg.title   || null;
+        const serverPos = roomManager.currentPosition(myRoom);
+        const drift = Math.abs(msg.positionSec - serverPos);
 
-    // 2. 🔥 RESET ROOM STATE (important)
-    myRoom.readyBroadcasted = false;
+        if (drift > SYNC_TOLERANCE_SEC) {
+          // Set per-connection cooldown before sending nudge so back-to-back
+          // sync_checks from the same non-master don't fire multiple nudges.
+          // Keep this tight (1.5s) so the non-master resumes reporting quickly
+          // and the server clock (fed by the master) stays accurate.
+          // Do NOT set myRoom.seekCooldownUntil here — that would also block
+          // the master's clock updates, causing the frozen-clock nudge storm.
+          nudgeCooldownUntil = now + 1500;
 
-    for (const p of myRoom.peers.values()) {
-      p.isReady = false;
-      p.hasVideo = false;        // ✅ new
-      p.fileDuration = 0;        // ✅ reset safely
-    }
+          send(ws, 'sync_nudge', {
+            positionSec: serverPos,
+            drift,
+            playing: myRoom.playState.playing,
+            serverTs: now,
+            masterId: myRoom.playState.masterId,
+          });
 
-    nudgeCooldownUntil = 0;
+          const driftWarn = drift > 10 ? ' [LARGE DRIFT!]' : '';
+          console.log(`[Sync] ${myRoom.code} nudging ${myPeerId.slice(0, 8)} drift=${drift.toFixed(2)}s (peer=${msg.positionSec.toFixed(1)}s server=${serverPos.toFixed(1)}s)${driftWarn}`);
+        }
+        return;
+      }
 
-  // 3. Broadcast to peers
-    broadcast(myRoom, 'peer_youtube_link', {
-      fromPeerId: myPeerId,
-      videoId:    msg.videoId,
-      title:      msg.title || null,
-      duration:   msg.duration || null,
-    });
+      // ── REACTION ─────────────────────────────────────────────────────────
+      if (type === 'reaction') {
+        broadcast(myRoom, 'reaction', { emoji: msg.emoji, fromPeerId: myPeerId }, myPeerId);
+        return;
+      }
 
-    console.log(`[YouTube] ${myRoom.code} link: ${msg.videoId} by ${peer?.name}`);
-    return;
-  }
-
-    if (type === 'camera_toggle' || type === 'mic_toggle' || type === 'sync_media_state') {
-      const peer = myRoom.peers.get(myPeerId);
-      if (!peer) return;
-      if (typeof msg.isCameraOn === 'boolean') peer.isCameraOn = msg.isCameraOn;
-      if (typeof msg.isMicOn === 'boolean') peer.isMicOn = msg.isMicOn;
-      broadcast(myRoom, type, {
-        peerId: myPeerId,
-        participantId: myPeerId,
-        isCameraOn: peer.isCameraOn !== false,
-        isMicOn: peer.isMicOn !== false,
-      }, myPeerId);
-      return;
-    }
-
-    // ── WebRTC signalling pass-through ────────────────────────────────────
-    if (type === 'webrtc_signal') {
-      myRoom.peers.forEach(({ ws, peerId }) => {
-        if (peerId === myPeerId) return;
-        // Always relay signaling to any peer socket that currently exists.
-        send(ws, 'webrtc_signal', {
-          signal: msg.signal,
+      // ── CHAT_MESSAGE ──────────────────────────────────────────────────────
+      // Room-isolated: only relayed to the OTHER peer in this room.
+      // We broadcast including the sender's own peerId so the receiver can
+      // distinguish self vs other messages if needed, but the server never
+      // sends it BACK to the sender — they already rendered it optimistically.
+      if (type === 'chat_message') {
+        const peer = myRoom.peers.get(myPeerId);
+        // Sanitize on the server side too — strip any HTML/control characters.
+        const rawText = String(msg.text || '').trim();
+        if (!rawText) return; // reject empty messages
+        // Hard cap per message — prevents someone sending a 10MB string.
+        const safeText = rawText.slice(0, 500);
+        const payload = {
+          messageId: msg.messageId || uuidv4(), // dedup key the client can use
           fromPeerId: myPeerId,
-        });
-      });
-      return;
-    }
+          participantId: myPeerId,
+          senderName: peer?.name || 'Guest',
+          text: safeText,
+          timestamp: Date.now(),
+        };
+        // Relay only to the OTHER peer — sender already rendered optimistically.
+        broadcast(myRoom, 'chat_message', payload, myPeerId);
+        console.log(`[Chat] ${myRoom.code} ${peer?.name}: ${safeText.slice(0, 40)}`);
+        return;
+      }
 
-    send(ws, 'error', { message: `Unknown message type: ${type}` });
+      // ── RETURN_TO_LOBBY ───────────────────────────────────────────────────
+      if (type === 'return_to_lobby') {
+        // Reset ALL peers' isReady and fileDuration — both sides need to
+        // re-confirm before the next session can start.
+        myRoom.peers.forEach(p => { p.isReady = false; p.fileDuration = null; });
+        const peer = myRoom.peers.get(myPeerId);
+        myRoom.playState.playing = false;
+        myRoom.playState.positionSec = 0;
+        myRoom.playState.lastUpdatedAt = Date.now();
+        // Clear YouTube state so the room snapshot sent to any future joiner
+        // does not restore a stale video from a previous session in this room.
+        myRoom.youtubeVideoId = null;
+        myRoom.youtubeTitle = null;
+        nudgeCooldownUntil = 0;
+        myRoom.seekCooldownUntil = 0;
+
+        broadcast(myRoom, 'return_to_lobby', {
+          peerId: myPeerId,
+          name: peer?.name || 'Your friend',
+        }, myPeerId);
+        // Notify the OTHER peer that this peer's ready state is now false.
+        // Exclude the sender — they already know they pressed back.
+        broadcast(myRoom, 'peer_ready', { peerId: myPeerId, isReady: false }, myPeerId);
+        console.log(`[Sync] ${myRoom.code} returning both peers to lobby`);
+        return;
+      }
+
+      // ── MODE_CHANGE ───────────────────────────────────────────────────────
+      // Either peer can switch the room between local-file and YouTube mode.
+      // This resets all ready / file state so both have to re-confirm.
+      if (type === 'mode_change') {
+        const peer = myRoom.peers.get(myPeerId);
+        myRoom.peers.forEach(p => { p.isReady = false; p.fileDuration = null; p.fileName = null; });
+        myRoom.playState.playing = false;
+        myRoom.playState.positionSec = 0;
+        myRoom.playState.lastUpdatedAt = Date.now();
+        myRoom.youtubeVideoId = null;
+        myRoom.youtubeTitle = null;
+        nudgeCooldownUntil = 0;
+        // Broadcast to ALL peers so both UIs update (sender gets their own echo back)
+        broadcast(myRoom, 'peer_mode_change', {
+          peerId: myPeerId,
+          name: peer?.name || 'Your friend',
+          mode: msg.mode === 'youtube' ? 'youtube' : 'local',
+        });
+        console.log(`[Mode] ${myRoom.code} → ${msg.mode} (${peer?.name})`);
+        return;
+      }
+
+      //--update duration------
+      if (type === 'update_duration') {
+        const peer = myRoom.peers.get(myPeerId);
+        if (!peer) return;
+
+        peer.fileDuration = msg.durationSec ?? 0;
+
+        const allPeers = [...myRoom.peers.values()];
+
+        // 🔍 Soft validation (YouTube only)
+        if (myRoom.youtubeVideoId && allPeers.length === 2) {
+          const [a, b] = allPeers;
+
+          if (a.fileDuration > 0 && b.fileDuration > 0) {
+            const diff = Math.abs(a.fileDuration - b.fileDuration);
+
+            if (diff > 2) {
+              console.warn(
+                `[Sync Warning] Room ${myRoom.code}: Possible YouTube desync (${diff}s)`
+              );
+            }
+          }
+        }
+
+        // 📡 Notify peer
+        broadcast(myRoom, 'peer_duration_updated', {
+          peerId: myPeerId,
+          durationSec: peer.fileDuration
+        }, myPeerId);
+
+        return;
+      }
+
+      // ── YOUTUBE_LINK ──────────────────────────────────────────────────────
+      // Either peer can paste the link; server stores it and fans it out so
+      // BOTH clients receive peer_youtube_link and load the same video.
+      if (type === 'youtube_link') {
+        const peer = myRoom.peers.get(myPeerId);
+
+        // 1. Store new video
+        myRoom.youtubeVideoId = msg.videoId || null;
+        myRoom.youtubeTitle = msg.title || null;
+
+        // 2. 🔥 RESET ROOM STATE (important)
+        myRoom.readyBroadcasted = false;
+
+        for (const p of myRoom.peers.values()) {
+          p.isReady = false;
+          p.hasVideo = false;        // ✅ new
+          p.fileDuration = 0;        // ✅ reset safely
+        }
+
+        nudgeCooldownUntil = 0;
+
+        // 3. Broadcast to peers
+        broadcast(myRoom, 'peer_youtube_link', {
+          fromPeerId: myPeerId,
+          videoId: msg.videoId,
+          title: msg.title || null,
+          duration: msg.duration || null,
+        });
+
+        console.log(`[YouTube] ${myRoom.code} link: ${msg.videoId} by ${peer?.name}`);
+        return;
+      }
+
+      if (type === 'camera_toggle' || type === 'mic_toggle' || type === 'sync_media_state') {
+        const peer = myRoom.peers.get(myPeerId);
+        if (!peer) return;
+        if (typeof msg.isCameraOn === 'boolean') peer.isCameraOn = msg.isCameraOn;
+        if (typeof msg.isMicOn === 'boolean') peer.isMicOn = msg.isMicOn;
+        broadcast(myRoom, type, {
+          peerId: myPeerId,
+          participantId: myPeerId,
+          isCameraOn: peer.isCameraOn !== false,
+          isMicOn: peer.isMicOn !== false,
+        }, myPeerId);
+        return;
+      }
+
+      // ── WebRTC signalling pass-through ────────────────────────────────────
+      if (type === 'webrtc_signal') {
+        myRoom.peers.forEach(({ ws, peerId }) => {
+          if (peerId === myPeerId) return;
+          // Always relay signaling to any peer socket that currently exists.
+          send(ws, 'webrtc_signal', {
+            signal: msg.signal,
+            fromPeerId: myPeerId,
+          });
+        });
+        return;
+      }
+
+      send(ws, 'error', { message: `Unknown message type: ${type}` });
     } catch (err) {
       console.error('[WS] Error processing message:', err.message);
-      try { send(ws, 'error', { message: 'Server error processing message' }); } catch {}
+      try { send(ws, 'error', { message: 'Server error processing message' }); } catch { }
     }
   });
 

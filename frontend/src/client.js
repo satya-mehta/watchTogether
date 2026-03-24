@@ -50,20 +50,20 @@ function getOrCreateParticipantId() {
 class WatchTogetherClient extends EventTarget {
   constructor(serverUrl, backendBaseUrl = null) {
     super();
-    this.serverUrl      = serverUrl;
+    this.serverUrl = serverUrl;
     this.backendBaseUrl = backendBaseUrl;
-    this.ws             = null;
-    this.peerId         = null;
-    this.participantId  = getOrCreateParticipantId();
-    this.roomCode       = null;
-    this.syncTimer      = null;
+    this.ws = null;
+    this.peerId = null;
+    this.participantId = getOrCreateParticipantId();
+    this.roomCode = null;
+    this.syncTimer = null;
     this.keepaliveTimer = null;
-    this._getPos        = null;
-    this._reconnectDelay      = 1000;
-    this._shouldReconnect     = true;
-    this._listenerCounts      = new Map();
+    this._getPos = null;
+    this._reconnectDelay = 1000;
+    this._shouldReconnect = true;
+    this._listenerCounts = new Map();
     this._bufferedWebrtcSignals = [];
-    this._isReconnectAttempt  = false;
+    this._isReconnectAttempt = false;
 
     // BUG FIX: track when to suppress sync_check sends (after seek/nudge)
     this._syncSuppressUntil = 0;
@@ -151,8 +151,8 @@ class WatchTogetherClient extends EventTarget {
 
   join({ roomCode, name, isHost = false }) {
     this.roomCode = roomCode;
-    this._myName  = name;
-    this._isHost  = isHost;
+    this._myName = name;
+    this._isHost = isHost;
     this._send('join', { roomCode, name, isHost, participantId: this.participantId });
   }
 
@@ -194,7 +194,7 @@ class WatchTogetherClient extends EventTarget {
   // Returns the messageId so the caller can render the message optimistically
   // and later deduplicate if it somehow arrives back via a relay.
   sendChat(text) {
-    const messageId = `${Date.now()}-${Math.random().toString(36).slice(2,8)}`;
+    const messageId = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
     this._send('chat_message', {
       text,
       messageId,
@@ -456,7 +456,7 @@ class WatchTogetherClient extends EventTarget {
   disconnect() {
     this._shouldReconnect = false;
     this.roomCode = null;
-    this.peerId   = null;
+    this.peerId = null;
     this._bufferedWebrtcSignals.length = 0;
     this._stopSync();
     this._stopKeepalive();

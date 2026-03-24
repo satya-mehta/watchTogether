@@ -120,49 +120,49 @@ const ICE_SERVERS = [
 // free all bandwidth for audio continuity.
 const QUALITY_TIERS = {
   high: {
-    label:     'high',
-    maxWidth:  640,
+    label: 'high',
+    maxWidth: 640,
     maxHeight: 480,
-    maxFps:    24,
-    maxKbps:   600,
+    maxFps: 24,
+    maxKbps: 600,
   },
   medium: {
-    label:     'medium',
-    maxWidth:  320,
+    label: 'medium',
+    maxWidth: 320,
     maxHeight: 240,
-    maxFps:    15,
-    maxKbps:   250,
+    maxFps: 15,
+    maxKbps: 250,
   },
   low: {
-    label:     'low',
-    maxWidth:  160,
+    label: 'low',
+    maxWidth: 160,
     maxHeight: 120,
-    maxFps:    10,
-    maxKbps:   80,
+    maxFps: 10,
+    maxKbps: 80,
   },
   audio_only: {
-    label:     'audio_only',
-    maxWidth:  0,
+    label: 'audio_only',
+    maxWidth: 0,
     maxHeight: 0,
-    maxFps:    0,
-    maxKbps:   0,
+    maxFps: 0,
+    maxKbps: 0,
   },
 };
 
 // How many consecutive poor samples before stepping down a tier
-const DOWNGRADE_THRESHOLD        = 3;
+const DOWNGRADE_THRESHOLD = 3;
 // How many consecutive good samples before stepping up a tier
-const UPGRADE_THRESHOLD          = 8;
+const UPGRADE_THRESHOLD = 8;
 // Polling interval for quality stats (ms)
-const QUALITY_POLL_MS            = 3000;
+const QUALITY_POLL_MS = 3000;
 // Packet loss % above which we consider quality poor
-const LOSS_BAD_PCT               = 8;
+const LOSS_BAD_PCT = 8;
 // Packet loss % below which we consider quality good enough to upgrade
-const LOSS_GOOD_PCT              = 2;
+const LOSS_GOOD_PCT = 2;
 // Round-trip time (ms) above which quality is poor
-const RTT_BAD_MS                 = 400;
+const RTT_BAD_MS = 400;
 // Round-trip time (ms) below which quality is good
-const RTT_GOOD_MS                = 200;
+const RTT_GOOD_MS = 200;
 // Minimum time (ms) between quality tier changes to avoid thrashing
 const QUALITY_CHANGE_COOLDOWN_MS = 12000;
 
@@ -177,37 +177,37 @@ const ICE_DISCONNECT_RESTART_DELAY_MS = 8500;
 export class VideoCall extends EventTarget {
   constructor(client, localEl, remoteEl) {
     super();
-    this.client    = client;
-    this.localEl   = localEl;
-    this.remoteEl  = remoteEl;
-    this.pc        = null;
-    this.localStream  = null;
-    this.isInitiator  = false;
-    this._started     = false;
-    this._pendingCandidates    = [];
-    this._remotePlayBlocked    = false;
+    this.client = client;
+    this.localEl = localEl;
+    this.remoteEl = remoteEl;
+    this.pc = null;
+    this.localStream = null;
+    this.isInitiator = false;
+    this._started = false;
+    this._pendingCandidates = [];
+    this._remotePlayBlocked = false;
     this._boundRemotePlaybackRetry = () => this._retryRemotePlayback();
     this._boundVisibilityMediaRetry = () => this._retryPendingLocalMedia();
-    this._unsubscribeClientEvents  = [];
-    this._remoteStreamTimer    = null;
-    this._disconnectTimer      = null;
-    this._videoSender          = null;
-    this._audioSender          = null;
-    this._cameraSwitching      = false;
-    this._cameraEnabled        = true;
-    this._ensureMediaPromise   = null;
-    this._shouldRetryVideo     = false;
-    this._shouldRetryAudio     = false;
-    this._makingOffer          = false;
-    this._iceRestartCount      = 0;
+    this._unsubscribeClientEvents = [];
+    this._remoteStreamTimer = null;
+    this._disconnectTimer = null;
+    this._videoSender = null;
+    this._audioSender = null;
+    this._cameraSwitching = false;
+    this._cameraEnabled = true;
+    this._ensureMediaPromise = null;
+    this._shouldRetryVideo = false;
+    this._shouldRetryAudio = false;
+    this._makingOffer = false;
+    this._iceRestartCount = 0;
 
     // ── Adaptive quality state ──────────────────────────────────────────
-    this._currentTier          = 'high';
-    this._qualityPollTimer     = null;
-    this._poorSampleCount      = 0;
-    this._goodSampleCount      = 0;
-    this._lastQualityChangeAt  = 0;
-    this._lastStats            = null;  // previous RTCStatsReport snapshot
+    this._currentTier = 'high';
+    this._qualityPollTimer = null;
+    this._poorSampleCount = 0;
+    this._goodSampleCount = 0;
+    this._lastQualityChangeAt = 0;
+    this._lastStats = null;  // previous RTCStatsReport snapshot
     this._videoDisabledForQuality = false; // true when tier = audio_only
 
     // Wire incoming signals
@@ -220,7 +220,7 @@ export class VideoCall extends EventTarget {
 
   async start(isInitiator = false) {
     this.isInitiator = isInitiator;
-    this._started    = true;
+    this._started = true;
     this.localStream = new MediaStream();
     await this.ensureMedia({
       audio: true,
@@ -251,7 +251,7 @@ export class VideoCall extends EventTarget {
         video: false,
         reason: 'toggle-mute',
         emitFailureEvents: true,
-      }).catch(() => {});
+      }).catch(() => { });
       return false;
     }
     track.enabled = !track.enabled;
@@ -302,7 +302,7 @@ export class VideoCall extends EventTarget {
         }
         if (this.localEl) {
           this.localEl.style.opacity = this._videoDisabledForQuality ? '0' : '1';
-          this.localEl.play().catch(() => {});
+          this.localEl.play().catch(() => { });
         }
         this._emit('camera_changed', { hidden: false });
         console.log('[WebRTC] Camera re-enabled (track unmuted, no renegotiation)');
@@ -335,7 +335,7 @@ export class VideoCall extends EventTarget {
     }
   }
 
-  get isMuted()  { return !this._getTrack('audio')?.enabled ?? true; }
+  get isMuted() { return !this._getTrack('audio')?.enabled ?? true; }
   get isCamOff() { return !this._cameraEnabled || !this._hasUsableTrack('video'); }
   get hasVideo() { return (this.localStream?.getVideoTracks().length ?? 0) > 0; }
   get hasAudio() { return (this.localStream?.getAudioTracks().length ?? 0) > 0; }
@@ -348,33 +348,33 @@ export class VideoCall extends EventTarget {
 
   end() {
     this._stopQualityMonitor();
-    this._unsubscribeClientEvents.forEach(u => { try { u(); } catch {} });
+    this._unsubscribeClientEvents.forEach(u => { try { u(); } catch { } });
     this._unsubscribeClientEvents = [];
     clearTimeout(this._remoteStreamTimer);
     clearTimeout(this._disconnectTimer);
     this._remoteStreamTimer = null;
-    this._disconnectTimer   = null;
+    this._disconnectTimer = null;
     this.localStream?.getTracks().forEach(t => t.stop());
     this.pc?.close();
-    this.pc           = null;
-    this.localStream  = null;
+    this.pc = null;
+    this.localStream = null;
     this._videoSender = null;
     this._audioSender = null;
     this._makingOffer = false;
     this._iceRestartCount = 0;
     this._cameraSwitching = false;
-    this._cameraEnabled   = true;
+    this._cameraEnabled = true;
     this._remotePlayBlocked = false;
     this._videoDisabledForQuality = false;
     this._currentTier = 'high';
     this._poorSampleCount = 0;
     this._goodSampleCount = 0;
     this._lastStats = null;
-    if (this.localEl)  this.localEl.srcObject  = null;
+    if (this.localEl) this.localEl.srcObject = null;
     if (this.remoteEl) this.remoteEl.srcObject = null;
-    document.removeEventListener('pointerup',        this._boundRemotePlaybackRetry, true);
-    document.removeEventListener('touchend',         this._boundRemotePlaybackRetry, true);
-    document.removeEventListener('keydown',          this._boundRemotePlaybackRetry, true);
+    document.removeEventListener('pointerup', this._boundRemotePlaybackRetry, true);
+    document.removeEventListener('touchend', this._boundRemotePlaybackRetry, true);
+    document.removeEventListener('keydown', this._boundRemotePlaybackRetry, true);
     document.removeEventListener('visibilitychange', this._boundRemotePlaybackRetry, true);
     document.removeEventListener('visibilitychange', this._boundVisibilityMediaRetry, true);
     document.removeEventListener('fullscreenchange', this._boundRemotePlaybackRetry, true);
@@ -398,8 +398,8 @@ export class VideoCall extends EventTarget {
     // all STUN and TURN relay addresses are already allocated. This removes
     // the 1–3 second visible gathering delay from call setup time.
     this.pc = new RTCPeerConnection({
-      iceServers:           ICE_SERVERS,
-      iceTransportPolicy:   'all',
+      iceServers: ICE_SERVERS,
+      iceTransportPolicy: 'all',
       iceCandidatePoolSize: 10,
     });
 
@@ -432,9 +432,9 @@ export class VideoCall extends EventTarget {
               this.remoteEl.srcObject.addTrack(event.track);
             }
           }
-          this.remoteEl.autoplay    = true;
+          this.remoteEl.autoplay = true;
           this.remoteEl.playsInline = true;
-          this.remoteEl.muted       = false;
+          this.remoteEl.muted = false;
         } catch (err) {
           console.error('[WebRTC] Failed to attach remote stream:', err.message);
           return;
@@ -481,9 +481,9 @@ export class VideoCall extends EventTarget {
       if (event.candidate) {
         const { type, protocol, address } = event.candidate;
         const label =
-          type === 'relay'  ? '🔄 relay (TURN)'  :
-          type === 'srflx'  ? '🌐 srflx (STUN)'  :
-          type === 'host'   ? '🏠 host (local)'   : type;
+          type === 'relay' ? '🔄 relay (TURN)' :
+            type === 'srflx' ? '🌐 srflx (STUN)' :
+              type === 'host' ? '🏠 host (local)' : type;
         console.log(`[ICE] Gathered candidate: ${label} | ${protocol} | ${address ?? '(hidden)'}`);
         this.client.sendSignal({ type: 'ice_candidate', candidate: event.candidate });
       } else {
@@ -544,10 +544,10 @@ export class VideoCall extends EventTarget {
     if (!this.pc) return;
     try {
       const stats = await this.pc.getStats();
-      let localType  = null;
+      let localType = null;
       let remoteType = null;
-      let protocol   = null;
-      let rttMs      = null;
+      let protocol = null;
+      let rttMs = null;
 
       // Build a lookup map of all candidates by their statsId so we can
       // resolve the local/remote candidate from the winning candidate pair.
@@ -560,12 +560,12 @@ export class VideoCall extends EventTarget {
 
       stats.forEach(report => {
         if (report.type === 'candidate-pair' && report.nominated) {
-          const local  = candidates[report.localCandidateId];
+          const local = candidates[report.localCandidateId];
           const remote = candidates[report.remoteCandidateId];
-          localType  = local?.candidateType  ?? '?';
+          localType = local?.candidateType ?? '?';
           remoteType = remote?.candidateType ?? '?';
-          protocol   = local?.protocol       ?? '?';
-          rttMs      = typeof report.currentRoundTripTime === 'number'
+          protocol = local?.protocol ?? '?';
+          rttMs = typeof report.currentRoundTripTime === 'number'
             ? Math.round(report.currentRoundTripTime * 1000)
             : null;
         }
@@ -577,8 +577,8 @@ export class VideoCall extends EventTarget {
       }
 
       const isRelay = localType === 'relay' || remoteType === 'relay';
-      const tag     = isRelay ? '🔄 TURN relay active' : '⚡ Direct P2P (no relay)';
-      const rttStr  = rttMs !== null ? ` | RTT ${rttMs}ms` : '';
+      const tag = isRelay ? '🔄 TURN relay active' : '⚡ Direct P2P (no relay)';
+      const rttStr = rttMs !== null ? ` | RTT ${rttMs}ms` : '';
       console.log(`[ICE] ✅ Connected via: ${localType} ↔ ${remoteType} | ${protocol}${rttStr} — ${tag}`);
 
       if (isRelay) {
@@ -654,7 +654,7 @@ export class VideoCall extends EventTarget {
               break;
             }
             console.log('[WebRTC] Offer collision — polite peer rolling back');
-            if (this.pc) await this.pc.setLocalDescription({ type: 'rollback' }).catch(() => {});
+            if (this.pc) await this.pc.setLocalDescription({ type: 'rollback' }).catch(() => { });
             this._makingOffer = false;
           }
         }
@@ -730,7 +730,7 @@ export class VideoCall extends EventTarget {
   async _pollQuality() {
     if (!this.pc || !this._videoSender) return;
     if (this.pc.iceConnectionState !== 'connected' &&
-        this.pc.iceConnectionState !== 'completed') return;
+      this.pc.iceConnectionState !== 'completed') return;
 
     try {
       const stats = await this.pc.getStats(this._videoSender);
@@ -767,9 +767,9 @@ export class VideoCall extends EventTarget {
   }
 
   _extractQualityMetrics(stats) {
-    let lossPercent     = 0;
-    let rttMs           = 0;
-    let foundOutbound   = false;
+    let lossPercent = 0;
+    let rttMs = 0;
+    let foundOutbound = false;
     let foundCandidatePair = false;
 
     stats.forEach(report => {
@@ -875,8 +875,8 @@ export class VideoCall extends EventTarget {
       }
 
       params.encodings.forEach(enc => {
-        enc.maxBitrate    = tier.maxKbps * 1000;
-        enc.maxFramerate  = tier.maxFps;
+        enc.maxBitrate = tier.maxKbps * 1000;
+        enc.maxFramerate = tier.maxFps;
         // scaleResolutionDownBy: 1 = full res, 2 = half, 4 = quarter
         // Calculate from maxWidth relative to original 640px capture
         const scaleFactor = tier.maxWidth > 0 ? Math.max(1, 640 / tier.maxWidth) : 4;
@@ -910,16 +910,16 @@ export class VideoCall extends EventTarget {
   _attachLocalPreview() {
     if (!this.localEl) return;
     try {
-      this.localEl.muted       = true;
-      this.localEl.autoplay    = true;
+      this.localEl.muted = true;
+      this.localEl.autoplay = true;
       this.localEl.playsInline = true;
-      this.localEl.srcObject   = this.localStream;
+      this.localEl.srcObject = this.localStream;
       if (this._hasUsableTrack('video') && this._cameraEnabled && !this._videoDisabledForQuality) {
         this.localEl.style.opacity = '1';
       } else {
         this.localEl.style.opacity = '0';
       }
-      this.localEl.play().catch(() => {});
+      this.localEl.play().catch(() => { });
     } catch (err) {
       console.error('[WebRTC] Failed to attach local stream:', err.message);
     }
@@ -1005,7 +1005,7 @@ export class VideoCall extends EventTarget {
       const existingTrack = this._getTrack(track.kind);
       if (existingTrack && existingTrack.id !== track.id) {
         this.localStream.removeTrack(existingTrack);
-        try { existingTrack.stop(); } catch {}
+        try { existingTrack.stop(); } catch { }
       }
       if (!this.localStream.getTracks().some((localTrack) => localTrack.id === track.id)) {
         this.localStream.addTrack(track);
@@ -1064,13 +1064,13 @@ export class VideoCall extends EventTarget {
       video: this._cameraEnabled && this._shouldRetryVideo,
       reason: 'visibility-retry',
       emitFailureEvents: false,
-    }).catch(() => {});
+    }).catch(() => { });
   }
 
   _bindRemotePlaybackRetry() {
-    document.addEventListener('pointerup',        this._boundRemotePlaybackRetry, true);
-    document.addEventListener('touchend',         this._boundRemotePlaybackRetry, true);
-    document.addEventListener('keydown',          this._boundRemotePlaybackRetry, true);
+    document.addEventListener('pointerup', this._boundRemotePlaybackRetry, true);
+    document.addEventListener('touchend', this._boundRemotePlaybackRetry, true);
+    document.addEventListener('keydown', this._boundRemotePlaybackRetry, true);
     document.addEventListener('visibilitychange', this._boundRemotePlaybackRetry, true);
     document.addEventListener('fullscreenchange', this._boundRemotePlaybackRetry, true);
   }

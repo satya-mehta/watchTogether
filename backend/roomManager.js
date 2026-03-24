@@ -1,11 +1,11 @@
 const { v4: uuidv4 } = require('uuid');
 
 // ── Room code generator ────────────────────────────────────────────────────
-const ADJECTIVES = ['COOL','NIGHT','SOFT','CALM','SWEET','LAZY','COZY','WILD','DARK','BRIGHT','VELVET','CRISP','MELLOW','SILVER'];
+const ADJECTIVES = ['COOL', 'NIGHT', 'SOFT', 'CALM', 'SWEET', 'LAZY', 'COZY', 'WILD', 'DARK', 'BRIGHT', 'VELVET', 'CRISP', 'MELLOW', 'SILVER'];
 
 function generateCode() {
-  const adj  = ADJECTIVES[Math.floor(Math.random() * ADJECTIVES.length)];
-  const num  = Math.floor(Math.random() * 9000) + 1000;
+  const adj = ADJECTIVES[Math.floor(Math.random() * ADJECTIVES.length)];
+  const num = Math.floor(Math.random() * 9000) + 1000;
   return `${adj}-${num}`;
 }
 
@@ -63,7 +63,7 @@ class RoomManager {
 
   // ── Create ───────────────────────────────────────────────────────────────
   create() {
-    const id   = uuidv4();
+    const id = uuidv4();
     const code = this._uniqueCode();
     const room = {
       id,
