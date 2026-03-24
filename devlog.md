@@ -571,6 +571,12 @@ The call lifecycle was coupled directly to WebSocket presence events:
 - No changes to `client.js` — event emission was already correct.
 - No changes to WebRTC signaling, playback sync, or YouTube logic.
 
+## To Do 
+- video call controls hidden by default, show on hover
+- grey out the chat icon ✅
+- default video call overlay size, based on incoming frame. 
+- show chat deafult text on chat section
+
 ---
 
 ## Notes & Known Limitations

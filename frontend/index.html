@@ -184,14 +184,67 @@ body{font-family:'Nunito',sans-serif;background:var(--bg);color:var(--text);min-
 .btn-ready.peer-wants-you{animation:readyPulse 1.4s ease-in-out infinite;border-color:var(--primary);color:var(--primary);}
 
 /* ── Watch ──────────────────────────────────────────────────────────────── */
-#screen-watch{padding:0;background:#000;position:relative;overflow:hidden;min-height:100vh;}
+#screen-watch{
+  padding:0;
+  background:#000;
+  position:relative;
+  overflow:hidden;
+  min-height:100vh;
+  --chat-panel-width:0px;
+  --chat-panel-height:0px;
+  --watch-chat-gap:12px;
+  --watch-video-inline-end:0px;
+  --watch-video-block-end:0px;
+}
+#screen-watch[data-chat-layout="split"]{
+  --watch-video-inline-end:var(--chat-panel-width);
+  --watch-video-block-end:0px;
+}
+#screen-watch[data-chat-layout="stack"]{
+  --watch-video-inline-end:0px;
+  --watch-video-block-end:var(--chat-panel-height);
+}
+
+/* Shared video surfaces */
+.video-container{
+  position:relative;
+  width:100%;
+  height:100%;
+  overflow:hidden;
+  background:#000;
+}
+.video-surface{
+  display:block;
+  width:100%;
+  height:100%;
+  object-fit:contain;
+  background:#000;
+}
 
 /* Hidden actual movie video */
-#movie-video{position:absolute;inset:0;width:100%;height:100%;object-fit:contain;z-index:1;background:#000;}
+#movie-video{
+  position:absolute;
+  top:0;
+  left:0;
+  right:var(--watch-video-inline-end);
+  bottom:var(--watch-video-block-end);
+  z-index:1;
+  transition:right .25s ease, bottom .25s ease;
+}
 
 /* Overlays */
 .watch-overlay{position:absolute;inset:0;z-index:2;pointer-events:none;}
-#player-hover-layer{position:absolute;inset:0;z-index:3;background:transparent;pointer-events:none;}
+#player-hover-layer{
+  position:absolute;
+  top:0;
+  left:0;
+  right:var(--watch-video-inline-end);
+  bottom:var(--watch-video-block-end);
+  z-index:3;
+  background:transparent;
+  pointer-events:none;
+  transition:right .25s ease, bottom .25s ease;
+}
 #player-hover-layer.active{pointer-events:auto;}
 
 /* PiP bubble — friend's face */
@@ -204,7 +257,7 @@ body{font-family:'Nunito',sans-serif;background:var(--bg);color:var(--text);min-
   overflow:hidden;cursor:grab;
   box-shadow:0 4px 24px rgba(0,0,0,.5);
   pointer-events:all;
-  background:#120f18;
+  background:#000;
 }
 .pip-resize-handle{
   position:absolute;
@@ -220,7 +273,17 @@ body{font-family:'Nunito',sans-serif;background:var(--bg);color:var(--text);min-
 .pip-resize-handle.ne{top:0;right:0;cursor:nesw-resize;}
 .pip-resize-handle.sw{bottom:0;left:0;cursor:nesw-resize;}
 .pip-resize-handle.se{bottom:0;right:0;cursor:nwse-resize;}
-#remote-video{width:100%;height:100%;object-fit:cover;background:#1c1828;display:block;}
+.pip-remote-stage{
+  position:absolute;
+  inset:0;
+  z-index:1;
+  display:flex;
+  align-items:center;
+  justify-content:center;
+  border-radius:inherit;
+  background:#000;
+}
+#remote-video{background:#000;}
 .pip-live{position:absolute;top:7px;left:7px;display:flex;align-items:center;gap:4px;z-index:2;}
 .pip-live-dot{width:6px;height:6px;border-radius:50%;background:#EC4899;animation:bl 1.5s ease infinite;box-shadow:0 0 6px #EC4899;}
 @keyframes bl{0%,100%{opacity:1}50%{opacity:.3}}
@@ -230,12 +293,40 @@ body{font-family:'Nunito',sans-serif;background:var(--bg);color:var(--text);min-
 .pip-mic-badge .material-symbols-outlined{font-size:14px;line-height:1;}
 
 /* Self-view (tiny, bottom-left of PiP) */
-#local-video{position:absolute;top:8px;right:8px;width:44px;height:44px;object-fit:cover;border:0.5px solid darkslategray;border-radius:10px;opacity:.9;z-index:5;background:rgba(0,0,0,.38);}
+.pip-local-stage{
+  position:absolute;
+  top:8px;
+  right:8px;
+  width:clamp(44px, 12vw, 64px);
+  height:clamp(44px, 12vw, 64px);
+  border:0.5px solid darkslategray;
+  border-radius:10px;
+  opacity:.9;
+  z-index:5;
+  background:rgba(0,0,0,.38);
+  box-shadow:0 8px 18px rgba(0,0,0,.24);
+}
+#local-video{border-radius:inherit;}
 
 /* Reactions sidebar */
-.reactions{position:absolute;right:18px;top:50%;transform:translateY(-50%);z-index:10;display:flex;flex-direction:column;gap:8px;pointer-events:all;}
+.reactions{
+  position:absolute;
+  right:calc(var(--watch-video-inline-end) + var(--watch-chat-gap));
+  top:50%;
+  transform:translateY(-50%);
+  z-index:10;
+  display:flex;
+  flex-direction:column;
+  gap:8px;
+  pointer-events:all;
+  transition:right .25s ease, top .25s ease, transform .25s ease;
+}
 .react-btn{width:40px;height:40px;border-radius:12px;background:rgba(99,102,241,.08);border:1px solid rgba(99,102,241,.25);display:flex;align-items:center;justify-content:center;font-size:18px;cursor:pointer;transition:transform .15s,background .2s,border-color .2s;}
 .react-btn:hover{transform:scale(1.25) rotate(-5deg);background:rgba(99,102,241,.15);border-color:rgba(99,102,241,.4);}
+#screen-watch[data-chat-layout="stack"] .reactions{
+  top:20px;
+  transform:none;
+}
 
 /* Sync toast — fixed top-centre so it sits above everything on all screens */
 .sync-toast{
@@ -282,23 +373,22 @@ body{font-family:'Nunito',sans-serif;background:var(--bg);color:var(--text);min-
 .watch-back:hover{background:rgba(24,30,40,.92);color:#fff;transform:translateY(-1px);}
 .watch-back.ctrl-hidden{opacity:0;pointer-events:none;}
 
-/* Control bar
-   transition lists BOTH opacity and right so that:
-   - opacity animates on hide/show (auto-hide system)
-   - right animates when chat panel opens/closes
-   Listing both on the same declaration prevents chat's `transition:right`
-   override from wiping out the opacity transition. */
 .ctrl-bar{
-  position:absolute;bottom:0;left:0;right:0;z-index:15;
-  padding:0 20px 18px;
+  position:absolute;
+  bottom:var(--watch-video-block-end);
+  left:0;
+  right:var(--watch-video-inline-end);
+  z-index:15;
+  padding:0 clamp(14px,2vw,20px) calc(18px + env(safe-area-inset-bottom, 0px));
   background:linear-gradient(to top,rgba(0,0,0,.9),transparent);
-  transition:opacity .3s ease, transform .3s ease, right .3s cubic-bezier(.4,0,.2,1);
+  transition:opacity .25s ease, transform .25s ease, right .25s ease, bottom .25s ease;
   pointer-events:all;
-  will-change:opacity,transform; /* promote to compositor layer — no layout reflow on hide */
+  will-change:opacity,transform;
+  overflow:hidden;
 }
 .ctrl-bar.ctrl-hidden{
   opacity:0;
-  transform:translateY(8px); /* subtle slide-down reinforces the fade */
+  transform:translateY(8px);
   pointer-events:none;
 }
 
@@ -331,7 +421,11 @@ input[type=range]#seek-bar{width:100%;height:4px;appearance:none;background:line
 input[type=range]#seek-bar::-webkit-slider-thumb{appearance:none;width:14px;height:14px;border-radius:50%;background:var(--primary);cursor:pointer;box-shadow:0 0 8px rgba(99,102,241,.6);}
 .time-row{display:flex;justify-content:space-between;margin-bottom:10px;}
 .time-txt{font-family:'Space Grotesk',monospace;font-size:11px;color:rgba(255,255,255,.35);}
-.ctrl-row{display:flex;align-items:center;gap:12px;}
+.ctrl-row{display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap;}
+.ctrl-cluster{display:flex;align-items:center;gap:12px;min-width:0;}
+.ctrl-cluster--transport{flex:1 1 280px;min-width:0;}
+.ctrl-cluster--meta{flex:0 0 auto;margin-left:auto;}
+.ctrl-volume{display:flex;align-items:center;gap:8px;min-width:0;}
 .track-row{display:grid;grid-template-columns:repeat(2,minmax(0,220px));gap:12px;margin-top:12px;max-width:460px;}
 .track-field{display:flex;flex-direction:column;gap:6px;min-width:0;}
 .track-label{font-size:10px;letter-spacing:1.8px;text-transform:uppercase;color:rgba(255,255,255,.42);font-weight:700;}
@@ -359,13 +453,59 @@ input[type=range]#seek-bar::-webkit-slider-thumb{appearance:none;width:14px;heig
 .cb.pp:hover{opacity:.9;box-shadow:0 0 20px rgba(0,212,255,.6);}
 .vol-sl{width:68px;height:3px;appearance:none;background:rgba(255,255,255,.18);border-radius:2px;cursor:pointer;}
 .vol-sl::-webkit-slider-thumb{appearance:none;width:10px;height:10px;border-radius:50%;background:#fff;cursor:pointer;}
-.spacer{flex:1;}
 .sync-chip{display:flex;align-items:center;gap:6px;background:rgba(18,16,26,.7);border:1px solid var(--border);border-radius:20px;padding:6px 13px;font-size:11px;color:rgba(255,255,255,.35);font-family:'Space Grotesk',monospace;}
 .chip-dot{width:6px;height:6px;border-radius:50%;}
 .chip-dot.ok{background:var(--green);box-shadow:0 0 8px rgba(16,185,129,.7);}
+.ctrl-bar[data-layout="compact"] .ctrl-cluster--transport,
+.ctrl-bar[data-layout="stacked"] .ctrl-cluster--transport{
+  flex-basis:100%;
+  justify-content:center;
+}
+.ctrl-bar[data-layout="compact"] .ctrl-cluster--meta,
+.ctrl-bar[data-layout="stacked"] .ctrl-cluster--meta{
+  width:100%;
+  margin-left:0;
+}
+.ctrl-bar[data-layout="compact"] .ctrl-cluster--meta{
+  justify-content:flex-end;
+}
+.ctrl-bar[data-layout="compact"] .track-row,
+.ctrl-bar[data-layout="stacked"] .track-row{
+  grid-template-columns:1fr;
+  max-width:none;
+}
+.ctrl-bar[data-layout="stacked"] .ctrl-row{
+  gap:10px;
+}
+.ctrl-bar[data-layout="stacked"] .ctrl-cluster--meta{
+  justify-content:space-between;
+  gap:10px;
+}
+.ctrl-bar[data-layout="stacked"] .sync-chip{
+  flex:1 1 auto;
+  justify-content:center;
+}
 
 /* Call controls strip (mute / camera / end) */
-.pip-call-controls{position:absolute;left:50%;bottom:10px;transform:translateX(-50%);z-index:7;display:flex;gap:8px;align-items:center;background:linear-gradient(180deg,rgba(22,18,30,.32),rgba(12,10,18,.86));border:1px solid rgba(255,255,255,.08);border-radius:999px;padding:7px 10px;backdrop-filter:blur(10px);pointer-events:auto;box-shadow:0 12px 26px rgba(0,0,0,.24);}
+.pip-call-controls{
+  position:absolute;
+  left:50%;
+  bottom:10px;
+  transform:translateX(-50%);
+  z-index:7;
+  display:flex;
+  gap:8px;
+  align-items:center;
+  background:linear-gradient(180deg,rgba(22,18,30,.32),rgba(12,10,18,.86));
+  border:1px solid rgba(255,255,255,.08);
+  border-radius:999px;
+  padding:7px 10px;
+  backdrop-filter:blur(10px);
+  pointer-events:auto;
+  box-shadow:0 12px 26px rgba(0,0,0,.24);
+  opacity:1;
+  transition:opacity .25s ease, transform .25s ease;
+}
 .pip-call-controls[hidden]{display:none !important;}
 .call-btn{background:none;border:none;border-radius:50%;width:36px;height:36px;display:flex;align-items:center;justify-content:center;cursor:pointer;color:var(--text);font-size:15px;transition:background .2s,color .2s;}
 .call-btn .material-symbols-outlined{font-size:20px;line-height:1;}
@@ -484,19 +624,28 @@ input[type=range]#seek-bar::-webkit-slider-thumb{appearance:none;width:14px;heig
 .src-panel.hidden{display:none;}
 
 /* ── YouTube IFrame player (watch screen) ────────────────────────────────── */
-#yt-player-wrap{position:absolute;inset:0;z-index:1;background:#000;display:none;pointer-events:all;}
+#yt-player-wrap{
+  position:absolute;
+  top:0;
+  left:0;
+  right:var(--watch-video-inline-end);
+  bottom:var(--watch-video-block-end);
+  z-index:1;
+  background:#000;
+  display:none;
+  pointer-events:all;
+  transition:right .25s ease, bottom .25s ease;
+}
 #yt-player-wrap.active{display:block;}
 #yt-player{width:100%;height:100%;}
 
 
 /* ════════════════════════════════════════════════════════════════════════════
-   CHAT PANEL — slide-in from right, video shrinks to 75%
+   CHAT PANEL
    ════════════════════════════════════════════════════════════════════════════ */
 
-/* Chat toggle button sits at the bottom of the reactions strip */
 .chat-toggle-btn{
   position:relative;
-  /* inherits .react-btn sizing and colours */
 }
 .chat-toggle-btn.active{
   background:rgba(99,102,241,.22);
@@ -509,7 +658,6 @@ input[type=range]#seek-bar::-webkit-slider-thumb{appearance:none;width:14px;heig
   align-items:center;
   justify-content:center;
 }
-/* Unread dot — appears on the top-right corner of the chat icon */
 .chat-unread-dot{
   display:none;
   position:absolute;
@@ -533,56 +681,43 @@ input[type=range]#seek-bar::-webkit-slider-thumb{appearance:none;width:14px;heig
   align-items:center;
   justify-content:center;
 }
-
-/* Chat panel — off-screen by default, slides in when .open */
 .chat-panel{
   position:absolute;
-  top:0;
-  right:0;
-  width:0;           /* collapses when closed */
-  height:100%;
-  background:rgba(10,13,20,.94);
-  border-left:1px solid rgba(99,102,241,.15);
+  background:linear-gradient(180deg,rgba(10,13,20,.94),rgba(7,10,16,.98));
   backdrop-filter:blur(12px);
   display:flex;
   flex-direction:column;
-  z-index:14;        /* above video (z:1) and reactions (z:10) but below ctrl-bar (z:15) */
+  z-index:14;
   overflow:hidden;
-  transition:width .3s cubic-bezier(.4,0,.2,1);
   pointer-events:none;
+  transition:width .25s ease, height .25s ease, box-shadow .25s ease;
 }
-.chat-panel.open{
-  width:clamp(240px, 25vw, 340px);
+#screen-watch[data-chat-layout="split"] .chat-panel{
+  top:0;
+  right:0;
+  bottom:0;
+  width:0;
+  height:100%;
+  border-left:1px solid rgba(99,102,241,.15);
+  box-shadow:-18px 0 48px rgba(0,0,0,.28);
+}
+#screen-watch[data-chat-layout="split"] .chat-panel.open{
+  width:clamp(260px, 28vw, 360px);
   pointer-events:all;
 }
-
-/* When chat is open, shrink the video area from the right.
-   We target the video element, YT wrapper, and reactions sidebar. */
-#screen-watch.chat-open #movie-video,
-#screen-watch.chat-open #yt-player-wrap,
-#screen-watch.chat-open #player-hover-layer{
-  right:clamp(240px, 25vw, 340px);
-  transition:right .3s cubic-bezier(.4,0,.2,1);
+#screen-watch[data-chat-layout="stack"] .chat-panel{
+  left:0;
+  right:0;
+  bottom:0;
+  width:100%;
+  height:0;
+  border-top:1px solid rgba(99,102,241,.15);
+  box-shadow:0 -18px 48px rgba(0,0,0,.28);
 }
-/* Reactions strip shifts left so it doesn't overlap chat panel */
-#screen-watch.chat-open .reactions{
-  right:calc(clamp(240px, 25vw, 340px) + 12px);
-  transition:right .3s cubic-bezier(.4,0,.2,1);
+#screen-watch[data-chat-layout="stack"] .chat-panel.open{
+  height:clamp(220px, 42vh, 360px);
+  pointer-events:all;
 }
-/* Smooth transition back to full width when chat closes */
-#movie-video, #yt-player-wrap, #player-hover-layer{
-  transition:right .3s cubic-bezier(.4,0,.2,1);
-}
-.reactions{
-  transition:right .3s cubic-bezier(.4,0,.2,1);
-}
-/* Control bar only spans the video area when chat is open */
-#screen-watch.chat-open .ctrl-bar{
-  right:clamp(240px, 25vw, 340px);
-  /* transition is already defined on .ctrl-bar base rule — no override needed */
-}
-
-/* ── Chat header ── */
 .chat-header{
   display:flex;
   align-items:center;
@@ -616,25 +751,64 @@ input[type=range]#seek-bar::-webkit-slider-thumb{appearance:none;width:14px;heig
   color:var(--text);
   background:rgba(255,255,255,.06);
 }
-
-/* ── Messages container ── */
 .chat-messages{
   flex:1;
   overflow-y:auto;
   overflow-x:hidden;
   padding:10px 12px;
-  display:flex;
-  flex-direction:column;
-  gap:10px;
   scroll-behavior:smooth;
 }
-/* Custom scrollbar — thin, matches the dark theme */
 .chat-messages::-webkit-scrollbar{width:4px;}
 .chat-messages::-webkit-scrollbar-track{background:transparent;}
 .chat-messages::-webkit-scrollbar-thumb{background:rgba(99,102,241,.3);border-radius:2px;}
 .chat-messages::-webkit-scrollbar-thumb:hover{background:rgba(99,102,241,.5);}
-
-/* ── Individual message bubbles ── */
+.chat-messages-flow{
+  min-height:100%;
+  display:flex;
+  flex-direction:column;
+  justify-content:flex-start;
+}
+.chat-messages[data-layout="centered"] .chat-messages-flow{
+  justify-content:center;
+}
+.chat-message-stack{
+  display:flex;
+  flex-direction:column;
+  gap:10px;
+  width:100%;
+}
+.chat-messages[data-empty="true"] .chat-message-stack{
+  display:none;
+}
+.chat-empty-state{
+  display:none;
+  align-items:center;
+  justify-content:center;
+  flex-direction:column;
+  gap:12px;
+  padding:24px 14px;
+  text-align:center;
+  color:rgba(245,247,250,.62);
+  opacity:.72;
+}
+.chat-messages[data-empty="true"] .chat-empty-state{
+  display:flex;
+}
+.chat-empty-icon{
+  width:48px;
+  height:48px;
+  border-radius:16px;
+  display:flex;
+  align-items:center;
+  justify-content:center;
+  background:rgba(99,102,241,.08);
+  border:1px solid rgba(99,102,241,.15);
+  color:rgba(245,247,250,.72);
+}
+.chat-empty-copy{
+  font-size:13px;
+  line-height:1.65;
+}
 .chat-msg{
   max-width:92%;
   display:flex;
@@ -646,11 +820,9 @@ input[type=range]#seek-bar::-webkit-slider-thumb{appearance:none;width:14px;heig
   from{opacity:0;transform:translateY(6px);}
   to{opacity:1;transform:none;}
 }
-/* Peer messages — left aligned */
 .chat-msg--peer{
   align-self:flex-start;
 }
-/* Own messages — right aligned */
 .chat-msg--self{
   align-self:flex-end;
   align-items:flex-end;
@@ -680,24 +852,20 @@ input[type=range]#seek-bar::-webkit-slider-thumb{appearance:none;width:14px;heig
   font-size:13px;
   line-height:1.5;
   word-break:break-word;
-  white-space:pre-wrap; /* preserve intentional spacing but no overflow */
+  white-space:pre-wrap;
 }
-/* Peer bubble style */
 .chat-msg--peer .chat-msg-text{
   background:rgba(255,255,255,.07);
   border:1px solid rgba(255,255,255,.07);
   color:var(--text);
   border-bottom-left-radius:4px;
 }
-/* Own bubble style */
 .chat-msg--self .chat-msg-text{
   background:rgba(99,102,241,.22);
   border:1px solid rgba(99,102,241,.3);
   color:#e8e9ff;
   border-bottom-right-radius:4px;
 }
-
-/* ── Input row ── */
 .chat-input-row{
   display:flex;
   align-items:center;
@@ -752,19 +920,15 @@ input[type=range]#seek-bar::-webkit-slider-thumb{appearance:none;width:14px;heig
   transform:none;
 }
 
-/* Mobile: chat panel takes more width on narrow screens */
 @media (max-width:640px){
-  .chat-panel.open{
-    width:min(86vw, 320px);
+  #screen-watch{
+    --watch-chat-gap:10px;
   }
-  #screen-watch.chat-open #movie-video,
-  #screen-watch.chat-open #yt-player-wrap,
-  #screen-watch.chat-open #player-hover-layer,
-  #screen-watch.chat-open .ctrl-bar{
-    right:min(86vw, 320px);
+  .ctrl-bar{
+    padding:0 14px calc(16px + env(safe-area-inset-bottom, 0px));
   }
-  #screen-watch.chat-open .reactions{
-    right:calc(min(86vw, 320px) + 10px);
+  #screen-watch[data-chat-layout="stack"] .chat-panel.open{
+    height:clamp(220px, 46vh, 400px);
   }
 }
 
@@ -990,7 +1154,7 @@ input[type=range]#seek-bar::-webkit-slider-thumb{appearance:none;width:14px;heig
 </div>
 
 <!-- ═══ WATCH ═══════════════════════════════════════════════════════════ -->
-<div class="screen" id="screen-watch">
+<div class="screen" id="screen-watch" data-chat-layout="split">
 
   <button class="watch-back" id="watch-back-btn" type="button">← Change file</button>
 
@@ -998,7 +1162,7 @@ input[type=range]#seek-bar::-webkit-slider-thumb{appearance:none;width:14px;heig
   <!-- controlsList and disablePictureInPicture block browser-native transport
        controls (Safari fullscreen overlay, AirPlay, PiP) so all play/pause
        goes through our own button, which has proper sync logic. -->
-  <video id="movie-video" preload="metadata"
+  <video id="movie-video" class="video-surface" preload="metadata"
     controlsList="nodownload nofullscreen noremoteplayback"
     disablepictureinpicture
     disableremoteplayback></video>
@@ -1029,28 +1193,31 @@ input[type=range]#seek-bar::-webkit-slider-thumb{appearance:none;width:14px;heig
       <span class="time-txt" id="time-total">0:00:00</span>
     </div>
     <div class="ctrl-row">
-      <button class="cb" id="skip-back-btn" title="-10s">
-        <span class="material-symbols-outlined">
-          keyboard_double_arrow_left
-        </span>
-      </button>
-      <button class="cb pp" id="play-pause-btn">
-        <svg id="pp-icon" width="22" height="22" viewBox="0 0 24 24" fill="currentColor"><path d="M8 5v14l11-7z"/></svg>
-      </button>
-      <button class="cb" id="skip-fwd-btn" title="+10s">
-        <span class="material-symbols-outlined">
-          keyboard_double_arrow_right
-        </span>
-      </button>
-      <div style="display:flex;align-items:center;gap:8px;">
-        <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor" style="color:rgba(255,255,255,.35)"><path d="M3 9v6h4l5 5V4L7 9H3zm13.5 3c0-1.77-1.02-3.29-2.5-4.03v8.05c1.48-.73 2.5-2.25 2.5-4.02z"/></svg>
-        <input class="vol-sl" type="range" id="volume-slider" min="0" max="1" step="0.05" value="0.8"/>
+      <div class="ctrl-cluster ctrl-cluster--transport">
+        <button class="cb" id="skip-back-btn" title="-10s">
+          <span class="material-symbols-outlined">
+            keyboard_double_arrow_left
+          </span>
+        </button>
+        <button class="cb pp" id="play-pause-btn">
+          <svg id="pp-icon" width="22" height="22" viewBox="0 0 24 24" fill="currentColor"><path d="M8 5v14l11-7z"/></svg>
+        </button>
+        <button class="cb" id="skip-fwd-btn" title="+10s">
+          <span class="material-symbols-outlined">
+            keyboard_double_arrow_right
+          </span>
+        </button>
+        <div class="ctrl-volume">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor" style="color:rgba(255,255,255,.35)"><path d="M3 9v6h4l5 5V4L7 9H3zm13.5 3c0-1.77-1.02-3.29-2.5-4.03v8.05c1.48-.73 2.5-2.25 2.5-4.02z"/></svg>
+          <input class="vol-sl" type="range" id="volume-slider" min="0" max="1" step="0.05" value="0.8"/>
+        </div>
       </div>
-      <div class="spacer"></div>
-      <div class="sync-chip"><div class="chip-dot ok"></div><span id="sync-chip-label">synced</span></div>
-      <button class="cb" id="fullscreen-btn">
-        <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor"><path d="M7 14H5v5h5v-2H7v-3zm-2-4h2V7h3V5H5v5zm12 7h-3v2h5v-5h-2v3zM14 5v2h3v3h2V5h-5z"/></svg>
-      </button>
+      <div class="ctrl-cluster ctrl-cluster--meta">
+        <div class="sync-chip"><div class="chip-dot ok"></div><span id="sync-chip-label">synced</span></div>
+        <button class="cb" id="fullscreen-btn">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor"><path d="M7 14H5v5h5v-2H7v-3zm-2-4h2V7h3V5H5v5zm12 7h-3v2h5v-5h-2v3zM14 5v2h3v3h2V5h-5z"/></svg>
+        </button>
+      </div>
     </div>
     <div class="track-row">
       <label class="track-field" for="captions-select">
@@ -1085,14 +1252,18 @@ input[type=range]#seek-bar::-webkit-slider-thumb{appearance:none;width:14px;heig
     <span class="material-symbols-outlined">mic_off</span>
   </div>
   <div class="pip-quality-badge" id="pip-quality-badge" style="position:absolute;bottom:8px;left:8px;z-index:5;font-size:9px;font-weight:700;letter-spacing:.6px;text-transform:uppercase;padding:2px 7px;border-radius:8px;display:none;background:rgba(0,0,0,.6);pointer-events:none;color:#fbbf24;">📶 Low quality</div>
-  <video id="remote-video" autoplay playsinline></video>
-  <!-- Shown when the remote peer has turned their camera off -->
-  <div id="remote-cam-off" style="display:none;position:absolute;inset:0;z-index:4;background:#1c1828;display:none;flex-direction:column;align-items:center;justify-content:center;gap:8px;border-radius:inherit;">
-    <div class="name-avatar" id="remote-cam-off-avatar" style="width:50px;height:50px;border-radius:18px;">FR</div>
-    <span id="remote-cam-off-name" style="font-size:12px;font-weight:700;color:rgba(245,247,250,.88);">Your friend</span>
-    <span style="font-size:10px;letter-spacing:1.5px;text-transform:uppercase;color:rgba(184,169,217,0.4);font-weight:600;">Camera off</span>
+  <div class="pip-remote-stage video-container" id="pip-remote-stage">
+    <video id="remote-video" class="video-surface" autoplay playsinline></video>
+    <!-- Shown when the remote peer has turned their camera off -->
+    <div id="remote-cam-off" style="display:none;position:absolute;inset:0;z-index:4;background:#1c1828;display:none;flex-direction:column;align-items:center;justify-content:center;gap:8px;border-radius:inherit;">
+      <div class="name-avatar" id="remote-cam-off-avatar" style="width:50px;height:50px;border-radius:18px;">FR</div>
+      <span id="remote-cam-off-name" style="font-size:12px;font-weight:700;color:rgba(245,247,250,.88);">Your friend</span>
+      <span style="font-size:10px;letter-spacing:1.5px;text-transform:uppercase;color:rgba(184,169,217,0.4);font-weight:600;">Camera off</span>
+    </div>
   </div>
-  <video id="local-video" autoplay playsinline muted></video>
+  <div class="pip-local-stage video-container" id="pip-local-stage">
+    <video id="local-video" class="video-surface" autoplay playsinline muted></video>
+  </div>
   <div class="pip-call-controls" id="pip-call-controls" hidden>
     <button class="call-btn" id="mute-btn" title="Mute microphone" aria-label="Mute microphone">
       <span class="material-symbols-outlined" id="mute-icon">mic</span>
@@ -1136,6 +1307,7 @@ input[type=range]#seek-bar::-webkit-slider-thumb{appearance:none;width:14px;heig
   const watchScreen = document.getElementById('screen-watch');
   const hoverLayer = document.getElementById('player-hover-layer');
   const pipCallControls = document.getElementById('pip-call-controls');
+  const pip = document.getElementById('pip-bubble');
   const HOVER_LAYER_RELEASE_DELAY_MS = 140;
   let hoverLayerTimer = null;
 
@@ -1189,22 +1361,12 @@ input[type=range]#seek-bar::-webkit-slider-thumb{appearance:none;width:14px;heig
     }, HOVER_LAYER_RELEASE_DELAY_MS);
   }
 
-  function handleOrientationLock() {
-    if (!document.fullscreenElement) return;
-    if (screen.orientation?.lock) {
-      screen.orientation.lock('landscape').catch(() => {});
-    }
-  }
-
   function handleOverlayInteraction(event) {
     if (!event.target?.closest?.('#pip-call-controls')) return false;
     event.stopPropagation();
+    showPipControls();
     return true;
   }
-
-  document.addEventListener('fullscreenchange', () => {
-    handleOrientationLock();
-  });
 
   // Fullscreen
   document.getElementById('fullscreen-btn').addEventListener('click', () => {
@@ -1255,6 +1417,8 @@ input[type=range]#seek-bar::-webkit-slider-thumb{appearance:none;width:14px;heig
 
   const cbar  = document.getElementById('ctrl-bar');
   const wback = document.getElementById('watch-back-btn');
+  const CONTROL_BAR_STACKED_WIDTH = 520;
+  const CONTROL_BAR_COMPACT_WIDTH = 760;
 
   // Track current visibility so we skip redundant DOM writes
   let isCtrlVisible   = true;
@@ -1266,6 +1430,23 @@ input[type=range]#seek-bar::-webkit-slider-thumb{appearance:none;width:14px;heig
   let isHoveringCtrl  = false;
   // True while the user is pressing / dragging on the controls themselves
   let isInteractingWithControls = false;
+
+  function syncControlBarLayout() {
+    if (!cbar) return;
+    const width = Math.round(cbar.getBoundingClientRect().width);
+    const nextLayout =
+      width <= CONTROL_BAR_STACKED_WIDTH
+        ? 'stacked'
+        : width <= CONTROL_BAR_COMPACT_WIDTH
+        ? 'compact'
+        : 'wide';
+    if (cbar.dataset.layout !== nextLayout) cbar.dataset.layout = nextLayout;
+  }
+
+  syncControlBarLayout();
+  if (cbar && 'ResizeObserver' in window) {
+    new ResizeObserver(() => syncControlBarLayout()).observe(cbar);
+  }
 
   // ── Helpers ──────────────────────────────────────────────────────────
 
@@ -1407,10 +1588,45 @@ input[type=range]#seek-bar::-webkit-slider-thumb{appearance:none;width:14px;heig
     startInactivityTimer(LEAVE_DELAY_MS);
   });
 
+  pip?.addEventListener('pointerenter', (event) => {
+    if (event.pointerType === 'mouse') showPipControls();
+  });
+  pip?.addEventListener('pointermove', (event) => {
+    if (event.pointerType === 'mouse') showPipControls();
+  });
+  pip?.addEventListener('pointerleave', (event) => {
+    if (event.pointerType === 'mouse') startPipControlsTimer();
+  });
+  pip?.addEventListener('pointerdown', (event) => {
+    if (!pip || pip.style.display === 'none') return;
+    if (isTouchLikePointerEvent(event) && !pipControlsVisible) {
+      showPipControls();
+      event.preventDefault();
+      event.stopPropagation();
+      return;
+    }
+    showPipControls();
+  }, true);
+
+  pipCallControls?.addEventListener('pointerenter', () => {
+    pipControlsHovering = true;
+    showPipControls({ restartTimer: false });
+    clearPipControlsTimer();
+  });
+  pipCallControls?.addEventListener('pointerleave', () => {
+    pipControlsHovering = false;
+    startPipControlsTimer();
+  });
   pipCallControls?.addEventListener('pointerdown', handleOverlayInteraction);
   pipCallControls?.addEventListener('mousedown', handleOverlayInteraction);
   pipCallControls?.addEventListener('touchstart', handleOverlayInteraction, { passive: true });
   pipCallControls?.addEventListener('click', handleOverlayInteraction);
+  pipCallControls?.addEventListener('pointerdown', () => {
+    pipControlsInteracting = true;
+    showPipControls();
+  });
+  pipCallControls?.addEventListener('pointermove', () => showPipControls());
+  pipCallControls?.addEventListener('click', () => showPipControls());
 
   function handleControlInteractionStart() {
     isInteractingWithControls = true;
@@ -1437,6 +1653,16 @@ input[type=range]#seek-bar::-webkit-slider-thumb{appearance:none;width:14px;heig
   cbar?.addEventListener('pointerdown', handleControlInteractionStart);
   document.addEventListener('pointerup', handleControlInteractionEnd);
   document.addEventListener('pointercancel', handleControlInteractionEnd);
+  document.addEventListener('pointerup', () => {
+    if (!pipControlsInteracting) return;
+    pipControlsInteracting = false;
+    startPipControlsTimer();
+  });
+  document.addEventListener('pointercancel', () => {
+    if (!pipControlsInteracting) return;
+    pipControlsInteracting = false;
+    startPipControlsTimer();
+  });
 
   // ── Play/pause wiring ──────────────────────────────────────────────────
 
@@ -1464,7 +1690,63 @@ input[type=range]#seek-bar::-webkit-slider-thumb{appearance:none;width:14px;heig
   //   - CSS transition is applied only during the shift/restore so normal
   //     drag/resize remain perfectly crisp with no lag.
 
-  const pip = document.getElementById('pip-bubble');
+  const PIP_CONTROLS_HIDE_DELAY_MS = 3000;
+  let pipControlsVisible = false;
+  let pipControlsHovering = false;
+  let pipControlsInteracting = false;
+  let pipControlsTimer = null;
+
+  function isTouchLikePointerEvent(event) {
+    return event?.pointerType === 'touch' || event?.pointerType === 'pen';
+  }
+
+  function clearPipControlsTimer() {
+    if (pipControlsTimer === null) return;
+    clearTimeout(pipControlsTimer);
+    pipControlsTimer = null;
+  }
+
+  function isPipControlInteractionActive() {
+    return pipDragging || !!pipResizeDir || pipControlsHovering || pipControlsInteracting;
+  }
+
+  function setPipControlsHidden(hidden) {
+    if (!pipCallControls) return;
+    pipCallControls.hidden = hidden;
+    pipControlsVisible = !hidden;
+  }
+
+  function startPipControlsTimer(delay = PIP_CONTROLS_HIDE_DELAY_MS) {
+    clearPipControlsTimer();
+    if (!pipControlsVisible || isPipControlInteractionActive() || pip?.style.display === 'none') return;
+    pipControlsTimer = window.setTimeout(() => {
+      pipControlsTimer = null;
+      if (!isPipControlInteractionActive()) setPipControlsHidden(true);
+    }, delay);
+  }
+
+  function showPipControls({ restartTimer = true } = {}) {
+    if (!pip || pip.style.display === 'none' || !pipCallControls) return;
+    setPipControlsHidden(false);
+    if (restartTimer) startPipControlsTimer();
+  }
+
+  function hidePipControls() {
+    clearPipControlsTimer();
+    if (isPipControlInteractionActive()) return;
+    setPipControlsHidden(true);
+  }
+
+  window.setPipOverlayVisibility = (visible) => {
+    pipControlsHovering = false;
+    pipControlsInteracting = false;
+    clearPipControlsTimer();
+    if (!visible) {
+      setPipControlsHidden(true);
+      return;
+    }
+    showPipControls();
+  };
 
   // ── Geometry helpers ──────────────────────────────────────────────────
 
@@ -1530,6 +1812,7 @@ input[type=range]#seek-bar::-webkit-slider-thumb{appearance:none;width:14px;heig
     // Additionally guard with the center-zone check.
     if (!isInDragZone(e)) return;
 
+    showPipControls({ restartTimer: false });
     pipDragging = true;
     pipDragPtId = e.pointerId;
     pip.setPointerCapture(e.pointerId); // track pointer even outside element
@@ -1558,6 +1841,7 @@ input[type=range]#seek-bar::-webkit-slider-thumb{appearance:none;width:14px;heig
     pip.style.cursor     = 'grab';
     pip.style.touchAction = '';
     pip.releasePointerCapture(e.pointerId);
+    startPipControlsTimer();
   });
 
   pip?.addEventListener('pointercancel', (e) => {
@@ -1566,6 +1850,7 @@ input[type=range]#seek-bar::-webkit-slider-thumb{appearance:none;width:14px;heig
     pipDragPtId = null;
     pip.style.cursor     = 'grab';
     pip.style.touchAction = '';
+    startPipControlsTimer();
   });
 
   // ── Resize state ──────────────────────────────────────────────────────
@@ -1578,6 +1863,7 @@ input[type=range]#seek-bar::-webkit-slider-thumb{appearance:none;width:14px;heig
   document.querySelectorAll('[data-resize]').forEach((handle) => {
     handle.addEventListener('pointerdown', (e) => {
       if (!pip) return;
+      showPipControls({ restartTimer: false });
       const rect = pip.getBoundingClientRect();
       pipResizeDir   = handle.dataset.resize;
       pipResizePtId  = e.pointerId;
@@ -1630,6 +1916,7 @@ input[type=range]#seek-bar::-webkit-slider-thumb{appearance:none;width:14px;heig
       handle.releasePointerCapture(e.pointerId);
       handle.style.touchAction = '';
       pip.style.cursor = 'grab';
+      startPipControlsTimer();
     });
 
     handle.addEventListener('pointercancel', (e) => {
@@ -1639,6 +1926,7 @@ input[type=range]#seek-bar::-webkit-slider-thumb{appearance:none;width:14px;heig
       pipResizeStart = null;
       handle.style.touchAction = '';
       pip.style.cursor = 'grab';
+      startPipControlsTimer();
     });
   });
 
@@ -1646,6 +1934,8 @@ input[type=range]#seek-bar::-webkit-slider-thumb{appearance:none;width:14px;heig
   window.addEventListener('resize', () => {
     if (!pip) return;
     applyPipSize(pip.offsetWidth, pip.offsetHeight, pip.offsetLeft, pip.offsetTop);
+    if (watchScreen?.classList.contains('chat-open')) onChatOpen();
+    syncControlBarLayout();
   });
 
   if (pip && 'ResizeObserver' in window) {
@@ -1662,77 +1952,79 @@ input[type=range]#seek-bar::-webkit-slider-thumb{appearance:none;width:14px;heig
   // Implementation detail: we add a short CSS transition ONLY for the
   // shift/restore, then remove it immediately after so dragging stays crisp.
 
-  let pipPreChatLeft = null;  // saved left before chat shift
+  let pipPreChatLeft = null;
   let pipPreChatTop  = null;
+  let pipChatShiftActive = false;
 
-  function getChatPanelWidth() {
-    // Match the CSS clamp: clamp(240px, 25vw, 340px), mobile: min(86vw, 320px)
-    if (window.innerWidth <= 640) return Math.min(window.innerWidth * 0.86, 320);
-    return Math.min(Math.max(window.innerWidth * 0.25, 240), 340);
+  function animatePipTo(left, top) {
+    if (!pip) return;
+    const clamped = clampPipPosition(left, top);
+    pip.style.transition = 'left 0.3s cubic-bezier(.4,0,.2,1), top 0.3s cubic-bezier(.4,0,.2,1)';
+    pip.style.left = clamped.left + 'px';
+    pip.style.top  = clamped.top  + 'px';
+    pip.addEventListener('transitionend', () => { pip.style.transition = 'none'; }, { once: true });
+  }
+
+  function getOpenSplitChatPanelRect() {
+    const chatPanel = document.getElementById('chat-panel');
+    if (!watchScreen || !chatPanel) return null;
+    if (watchScreen.dataset.chatLayout !== 'split') return null;
+    const rect = chatPanel.getBoundingClientRect();
+    return rect.width > 0 ? rect : null;
   }
 
   function onChatOpen() {
     if (!pip || pip.style.display === 'none') return;
+    const chatRect = getOpenSplitChatPanelRect();
+    if (!chatRect) return;
 
-    // Resolve current left/top (bubble may still use right:20px from initial CSS)
     const rect = pip.getBoundingClientRect();
     const curLeft = rect.left;
     const curTop  = rect.top;
+    const anchorLeft = pipChatShiftActive && pipPreChatLeft !== null ? pipPreChatLeft : curLeft;
+    const anchorTop  = pipChatShiftActive && pipPreChatTop !== null ? pipPreChatTop : curTop;
+    const anchorRight = anchorLeft + pip.offsetWidth;
 
-    // Ensure left/top are explicitly set (in case right:auto hasn't fired yet)
     pip.style.right = 'auto';
     pip.style.left  = curLeft + 'px';
     pip.style.top   = curTop  + 'px';
 
-    const chatW      = getChatPanelWidth();
-    const chatLeft   = window.innerWidth - chatW;  // left edge of chat panel
-    const pipRight   = curLeft + pip.offsetWidth;
+    if (anchorRight <= chatRect.left) {
+      if (pipChatShiftActive) {
+        pipChatShiftActive = false;
+        animatePipTo(anchorLeft, anchorTop);
+      }
+      return;
+    }
 
-    // Only shift if the PiP actually overlaps the chat panel
-    if (pipRight <= chatLeft) return;
+    if (!pipChatShiftActive) {
+      pipPreChatLeft = curLeft;
+      pipPreChatTop  = curTop;
+    }
 
-    // Save original position for restore
-    pipPreChatLeft = curLeft;
-    pipPreChatTop  = curTop;
-
-    // Target: move bubble just left of the chat panel, with a small gap
-    const GAP      = 12;
-    const targetLeft = clampPipPosition(chatLeft - pip.offsetWidth - GAP, curTop).left;
-
-    // Enable transition only for this shift
-    pip.style.transition = 'left 0.3s cubic-bezier(.4,0,.2,1), top 0.3s cubic-bezier(.4,0,.2,1)';
-    pip.style.left = targetLeft + 'px';
-
-    // Remove transition once animation completes so drag stays instant
-    pip.addEventListener('transitionend', () => { pip.style.transition = 'none'; }, { once: true });
+    pipChatShiftActive = true;
+    animatePipTo(chatRect.left - pip.offsetWidth - 12, anchorTop);
   }
 
   function onChatClose() {
-    if (!pip || pipPreChatLeft === null) return;
-
+    if (!pip || pipPreChatLeft === null || pipPreChatTop === null) return;
     const restoreLeft = pipPreChatLeft;
     const restoreTop  = pipPreChatTop;
     pipPreChatLeft = null;
     pipPreChatTop  = null;
-
-    pip.style.transition = 'left 0.3s cubic-bezier(.4,0,.2,1), top 0.3s cubic-bezier(.4,0,.2,1)';
-    const clamped = clampPipPosition(restoreLeft, restoreTop);
-    pip.style.left = clamped.left + 'px';
-    pip.style.top  = clamped.top  + 'px';
-
-    pip.addEventListener('transitionend', () => { pip.style.transition = 'none'; }, { once: true });
+    pipChatShiftActive = false;
+    animatePipTo(restoreLeft, restoreTop);
   }
 
-  // Watch #screen-watch for .chat-open being added/removed
-  const watchScreenEl = document.getElementById('screen-watch');
-  if (watchScreenEl) {
-    let wasChatOpen = false;
+  if (watchScreen) {
+    let wasChatOpen = watchScreen.classList.contains('chat-open');
     new MutationObserver(() => {
-      const isChatOpen = watchScreenEl.classList.contains('chat-open');
+      const isChatOpen = watchScreen.classList.contains('chat-open');
       if (isChatOpen && !wasChatOpen) onChatOpen();
       else if (!isChatOpen && wasChatOpen) onChatClose();
+      else if (isChatOpen) onChatOpen();
       wasChatOpen = isChatOpen;
-    }).observe(watchScreenEl, { attributes: true, attributeFilter: ['class'] });
+    }).observe(watchScreen, { attributes: true, attributeFilter: ['class', 'data-chat-layout'] });
   }
 
   // Lobby file drop visual

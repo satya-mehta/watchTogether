@@ -96,6 +96,8 @@ const remoteNameChip = document.getElementById('remote-name-chip');
 const remoteCamOffName = document.getElementById('remote-cam-off-name');
 const remoteCamOffAvatar = document.getElementById('remote-cam-off-avatar');
 const pipCallControls = document.getElementById('pip-call-controls');
+const pipRemoteStage = document.getElementById('pip-remote-stage');
+const pipLocalStage = document.getElementById('pip-local-stage');
 
 const syncToast     = document.getElementById('sync-toast');
 const reactionBtns  = document.querySelectorAll('[data-reaction]');
@@ -104,6 +106,37 @@ const screenEls = {
   lobby: document.getElementById('screen-lobby'),
   watch: document.getElementById('screen-watch'),
 };
+
+function syncVideoAspectMetadata(videoEl, containerEl) {
+  if (!videoEl || !containerEl) return;
+  const { videoWidth, videoHeight } = videoEl;
+  if (!videoWidth || !videoHeight) return;
+
+  const ratio = videoWidth / videoHeight;
+  const orientation =
+    ratio > 1.05
+      ? 'landscape'
+      : ratio < 0.95
+      ? 'portrait'
+      : 'square';
+  const ratioText = ratio.toFixed(3);
+
+  videoEl.dataset.aspectRatio = ratioText;
+  videoEl.dataset.orientation = orientation;
+  containerEl.dataset.aspectRatio = ratioText;
+  containerEl.dataset.orientation = orientation;
+}
+
+function wireVideoAspectMetadata(videoEl, containerEl) {
+  if (!videoEl || !containerEl) return;
+  const sync = () => syncVideoAspectMetadata(videoEl, containerEl);
+  videoEl.addEventListener('loadedmetadata', sync);
+  videoEl.addEventListener('resize', sync);
+  sync();
+}
+
+wireVideoAspectMetadata(remoteVideo, pipRemoteStage);
+wireVideoAspectMetadata(localVideo, pipLocalStage);
 
 // ── App state ─────────────────────────────────────────────────────────────
 let client   = null;
@@ -2714,7 +2747,11 @@ function showLobby(code) {
 function showCallUI(visible) {
   const pipBubble = document.getElementById('pip-bubble');
   pipBubble?.style.setProperty('display', visible ? 'block' : 'none');
-  if (pipCallControls) pipCallControls.hidden = !visible;
+  if (typeof window.setPipOverlayVisibility === 'function') {
+    window.setPipOverlayVisibility(visible);
+  } else if (pipCallControls) {
+    pipCallControls.hidden = !visible;
+  }
   if (visible) {
     if (pipBubble) {
       pipBubble.style.left = '';

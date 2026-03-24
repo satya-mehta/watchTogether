@@ -69,10 +69,20 @@ export class Chat {
     // DOM refs — populated in _buildDOM()
     this._panel         = null;
     this._msgContainer  = null;
+    this._msgFlow       = null;
+    this._msgStack      = null;
+    this._emptyState    = null;
     this._input         = null;
     this._sendBtn       = null;
     this._chatToggleBtn = null;
     this._unreadDot     = null;
+    this._watchScreen   = null;
+    this._layoutObserver = null;
+    this._boundSyncLayout = () => {
+      this._syncPanelLayoutMode();
+      this._syncPanelMetrics();
+      this._syncMessageLayout();
+    };
 
     this._wired = false;
   }
@@ -84,6 +94,8 @@ export class Chat {
     if (this._wired) return;
     this._buildDOM();
     this._wireEvents();
+    this._bindLayoutObservers();
+    this._boundSyncLayout();
     this._wired = true;
   }
 
@@ -128,9 +140,11 @@ export class Chat {
     this._seenIds      = new Set();
     this._unread       = 0;
     this._open         = false;
-    if (this._msgContainer) this._msgContainer.innerHTML = '';
+    if (this._msgStack) this._msgStack.innerHTML = '';
+    if (this._msgContainer) this._msgContainer.scrollTop = 0;
     this._setUnreadDot(0);
     this._closePanel();
+    this._boundSyncLayout();
   }
 
   /** Programmatically open the chat panel. */
@@ -151,6 +165,7 @@ export class Chat {
     const watchScreen = document.getElementById('screen-watch');
     const reactions   = watchScreen?.querySelector('.reactions');
     if (!watchScreen) return;
+    this._watchScreen = watchScreen;
 
     // ── Chat toggle button (appended below reactions) ───────────────────────
     const toggleBtn = document.createElement('button');
@@ -161,7 +176,7 @@ export class Chat {
     // Chat bubble SVG icon
     toggleBtn.innerHTML = `
       <span class="chat-btn-inner">
-        <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="grey">
           <path d="M20 2H4c-1.1 0-2 .9-2 2v18l4-4h14c1.1 0 2-.9 2-2V4c0-1.1-.9-2-2-2zm0 14H6l-2 2V4h16v12z"/>
         </svg>
         <span class="chat-unread-dot" id="chat-unread-dot" aria-hidden="true"></span>
@@ -188,7 +203,19 @@ export class Chat {
           <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="M19 6.41L17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
         </button>
       </div>
-      <div class="chat-messages" id="chat-messages" role="log" aria-live="polite" aria-label="Messages"></div>
+      <div class="chat-messages" id="chat-messages" role="log" aria-live="polite" aria-label="Messages" data-empty="true" data-layout="centered">
+        <div class="chat-messages-flow" id="chat-messages-flow">
+          <div class="chat-empty-state" id="chat-empty-state" aria-hidden="true">
+            <div class="chat-empty-icon">
+              <svg width="22" height="22" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+                <path d="M20 2H4c-1.1 0-2 .9-2 2v18l4-4h14c1.1 0 2-.9 2-2V4c0-1.1-.9-2-2-2zm0 14H6l-2 2V4h16v12z"/>
+              </svg>
+            </div>
+            <p class="chat-empty-copy">Start chatting while you're watching 👀</p>
+          </div>
+          <div class="chat-message-stack" id="chat-message-stack"></div>
+        </div>
+      </div>
       <div class="chat-input-row">
         <input
           class="chat-input"
@@ -208,6 +235,9 @@ export class Chat {
 
     this._panel        = panel;
     this._msgContainer = panel.querySelector('#chat-messages');
+    this._msgFlow      = panel.querySelector('#chat-messages-flow');
+    this._msgStack     = panel.querySelector('#chat-message-stack');
+    this._emptyState   = panel.querySelector('#chat-empty-state');
     this._input        = panel.querySelector('#chat-input');
     this._sendBtn      = panel.querySelector('#chat-send-btn');
 
@@ -256,14 +286,17 @@ export class Chat {
   _openPanel() {
     this._open = true;
     this._panel?.classList.add('open');
-    document.getElementById('screen-watch')?.classList.add('chat-open');
+    this._watchScreen?.classList.add('chat-open');
     this._chatToggleBtn?.classList.add('active');
     this._chatToggleBtn?.setAttribute('aria-label', 'Close chat');
     // Clear unread on open
     this._unread = 0;
     this._setUnreadDot(0);
     // Scroll to bottom on open (user wants to see latest)
-    requestAnimationFrame(() => this._scrollToBottom(true));
+    requestAnimationFrame(() => {
+      this._scrollToBottom(true);
+      this._boundSyncLayout();
+    });
     // Focus input
     setTimeout(() => this._input?.focus(), 300);
   }
@@ -271,9 +304,10 @@ export class Chat {
   _closePanel() {
     this._open = false;
     this._panel?.classList.remove('open');
-    document.getElementById('screen-watch')?.classList.remove('chat-open');
+    this._watchScreen?.classList.remove('chat-open');
     this._chatToggleBtn?.classList.remove('active');
     this._chatToggleBtn?.setAttribute('aria-label', 'Open chat');
+    this._boundSyncLayout();
   }
 
   // ── Sending ───────────────────────────────────────────────────────────────
@@ -337,7 +371,7 @@ export class Chat {
   // ── DOM append ────────────────────────────────────────────────────────────
 
   _appendMessage({ messageId, participantId, senderName, text, timestamp, isSelf }) {
-    if (!this._msgContainer) return;
+    if (!this._msgContainer || !this._msgStack) return;
 
     // Track seen IDs
     this._seenIds.add(messageId);
@@ -374,12 +408,14 @@ export class Chat {
     el.appendChild(metaEl);
     el.appendChild(textEl);
 
-    this._msgContainer.appendChild(el);
+    this._msgStack.appendChild(el);
 
     // Prune oldest messages from DOM if we've exceeded RENDER_BATCH_SIZE
-    while (this._msgContainer.children.length > RENDER_BATCH_SIZE) {
-      this._msgContainer.removeChild(this._msgContainer.firstChild);
+    while (this._msgStack.children.length > RENDER_BATCH_SIZE) {
+      this._msgStack.removeChild(this._msgStack.firstChild);
     }
+
+    this._syncMessageLayout();
 
     // Auto-scroll only when user was already near the bottom
     if (wasNearBottom) this._scrollToBottom();
@@ -404,6 +440,42 @@ export class Chat {
         }
       });
     }
+  }
+
+  _bindLayoutObservers() {
+    if (typeof window === 'undefined') return;
+    window.addEventListener('resize', this._boundSyncLayout, { passive: true });
+    if (!('ResizeObserver' in window) || this._layoutObserver) return;
+    this._layoutObserver = new ResizeObserver(() => this._boundSyncLayout());
+    [this._panel, this._msgContainer, this._msgFlow, this._msgStack].forEach((element) => {
+      if (element) this._layoutObserver.observe(element);
+    });
+  }
+
+  _syncPanelLayoutMode() {
+    if (!this._watchScreen || typeof window === 'undefined') return;
+    const shouldStack = window.innerWidth <= 820 && window.innerHeight > window.innerWidth;
+    this._watchScreen.dataset.chatLayout = shouldStack ? 'stack' : 'split';
+  }
+
+  _syncPanelMetrics() {
+    if (!this._watchScreen || !this._panel) return;
+    const rect = this._panel.getBoundingClientRect();
+    this._watchScreen.style.setProperty('--chat-panel-width', `${Math.round(rect.width)}px`);
+    this._watchScreen.style.setProperty('--chat-panel-height', `${Math.round(rect.height)}px`);
+  }
+
+  _syncMessageLayout() {
+    if (!this._msgContainer || !this._msgStack) return;
+    const hasMessages = this._msgStack.childElementCount > 0;
+    const contentHeight = hasMessages ? this._msgStack.scrollHeight : 0;
+    const containerHeight = this._msgContainer.clientHeight;
+    const shouldCenter = !hasMessages || contentHeight <= Math.max(containerHeight - 16, 0);
+
+    this._msgContainer.dataset.empty = hasMessages ? 'false' : 'true';
+    this._msgContainer.dataset.layout = shouldCenter ? 'centered' : 'stacked';
+    this._emptyState?.setAttribute('aria-hidden', hasMessages ? 'true' : 'false');
+    if (!hasMessages) this._msgContainer.scrollTop = 0;
   }
 
   // ── Unread dot ────────────────────────────────────────────────────────────
