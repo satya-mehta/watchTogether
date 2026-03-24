@@ -535,7 +535,9 @@ input[type=range]#seek-bar{display:block;width:100%;height:4px;margin:0;appearan
 input[type=range]#seek-bar::-webkit-slider-thumb{appearance:none;width:14px;height:14px;border-radius:50%;background:var(--primary);cursor:pointer;box-shadow:0 0 8px rgba(99,102,241,.6);}
 .time-row{display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;}
 .time-txt{font-family:'Space Grotesk',monospace;font-size:11px;color:rgba(255,255,255,.35);}
-.ctrl-row{position:relative;display:flex;align-items:center;justify-content:flex-end;gap:12px;min-height:52px;}
+.ctrl-row{
+  position:relative;display:flex;align-items:center;justify-content:start;gap:12px;min-height:52px;z-index: 10;
+}
 .ctrl-cluster{display:flex;align-items:center;gap:12px;min-width:0;}
 .ctrl-cluster--transport{
   position:absolute;
@@ -2042,7 +2044,10 @@ input[type=range]#seek-bar::-webkit-slider-thumb{appearance:none;width:14px;heig
     applyPipPosition(x, y);
   }
 
-  window.resetPipPosition = () => resetPipPosition();
+  window.resetPipPosition = function (opts) { // fix for bug of recurssion call
+  return resetPipPosition(opts);
+  };
+
   window.syncPipBounds = syncPipBounds;
 
   // Returns true if the pointer landed in the draggable center zone.
