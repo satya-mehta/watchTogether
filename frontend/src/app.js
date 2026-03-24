@@ -1698,6 +1698,7 @@ function leaveRoomAndGoHome(message = '') {
   // Clear chat log and close panel — fresh state for next session
   chat.reset();
   if (roomMode === 'youtube') {
+    console.log("YOutube player cleanup executing..")
     if (ytPlayer && ytPlayerReady && typeof ytPlayer.pauseVideo === 'function') { ytPlayer.pauseVideo(); ytPlayer.seekTo(0, true); }
     ytIsPaused = true; ytCurrentTime = 0;
     clearYtVideoSelection();
@@ -2187,6 +2188,7 @@ function wireClientEvents() {
   client.on('peer_youtube_link', async ({ fromPeerId, videoId, title, duration }) => {
     if (!videoId) return;
     const isMine = fromPeerId === client.peerId;
+    updateFriendYtPreview(videoId, title); //update friend card for the latest video thumbail before checking ismine
 
     // The sender already handled their own UI in processYtUrl — skip to avoid double work
     if (isMine) return;
