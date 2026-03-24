@@ -2741,6 +2741,8 @@ watchBackBtn?.addEventListener('click', () => {
 
 lobbyBackBtn?.addEventListener('click', () => {
   leaveRoomAndGoHome();
+  resetOwnYtPreview();
+  resetFriendYtPreview();
 });
 
 // ═════════════════════════════════════════════════════════════════════════════
@@ -3203,7 +3205,6 @@ function startYtPolling(videoId = null) {
     // ✅ prevent stale updates
     if (d > 0 && ytDuration === 0 && (!videoId || activeVideoId === videoId)) {
       ytDuration = d;
-      client?.updateDuration(d); // 🔥 important
     }
     else if (d > 0 && (!videoId || activeVideoId === videoId)) {
       ytDuration = d;
@@ -3334,6 +3335,30 @@ function updateFriendYtPreview(videoId, title) {
   if (thumbEl) thumbEl.src = `https://img.youtube.com/vi/${videoId}/mqdefault.jpg`;
   if (titleEl) titleEl.textContent = title || 'YouTube Video';
   if (prevEl) prevEl.classList.add('show');
+}
+
+function resetFriendYtPreview() {
+  const thumb = document.getElementById('friend-yt-thumb');
+  const title = document.getElementById('friend-yt-title');
+  const dur = document.getElementById('friend-yt-dur');
+  const card = document.getElementById('friend-yt-preview');
+
+  if (thumb) thumb.src = '';
+  if (title) title.textContent = '';
+  if (dur) dur.textContent = '';
+  card?.classList.remove('show');
+}
+
+function resetOwnYtPreview() {
+  const thumb = document.getElementById('yt-thumb');
+  const title = document.getElementById('yt-title');
+  const dur = document.getElementById('yt-dur');
+  const card = document.getElementById('yt-preview');
+
+  if (thumb) thumb.src = '';
+  if (title) title.textContent = '';
+  if (dur) dur.textContent = '';
+  card?.classList.remove('show');
 }
 
 // ── Wire lobby toggle + URL input ─────────────────────────────────────────
