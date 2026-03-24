@@ -231,6 +231,7 @@ body{font-family:'Nunito',sans-serif;background:var(--bg);color:var(--text);min-
   justify-content:center;
   overflow:hidden;
   transition:right .25s ease, bottom .25s ease;
+  background: #000;
 }
 #player-root{
   position:relative;
@@ -245,11 +246,11 @@ body{font-family:'Nunito',sans-serif;background:var(--bg);color:var(--text);min-
   flex:1;
   min-height:0;
   display:flex;
-  align-items:center;
+  align-items:flex-start;
   justify-content:center;
   overflow:hidden;
   background:#000;
-
+  padding-bottom: 5px;
 }
 #player-stage{
   position:relative;
@@ -284,6 +285,7 @@ body{font-family:'Nunito',sans-serif;background:var(--bg);color:var(--text);min-
   max-height:100%;
   object-fit:contain;
   background:#000;
+  transform: scale(1.01);
 }
 
 /* Hidden actual movie video */
@@ -493,6 +495,15 @@ body{font-family:'Nunito',sans-serif;background:var(--bg);color:var(--text);min-
   will-change:opacity,transform;
   overflow:hidden;
 }
+
+#ctrl-bar {
+  background: linear-gradient(
+    to top,
+    rgba(0,0,0,0.95),
+    rgba(0,0,0,0.7),
+    rgba(0,0,0,0)
+  );
+}
 .ctrl-bar.ctrl-hidden{
   opacity:0;
   transform:translateY(8px);
@@ -528,7 +539,7 @@ body{font-family:'Nunito',sans-serif;background:var(--bg);color:var(--text);min-
   position:relative;   /* IMPORTANT */
   height: auto;
   width:100%;
-  padding:0 var(--control-pad-inline);
+  padding:0;
 }
 #ctrl-bar{
   flex-shrink:0;   /*  prevents compression */
