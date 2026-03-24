@@ -242,13 +242,14 @@ body{font-family:'Nunito',sans-serif;background:var(--bg);color:var(--text);min-
 }
 #player-stage-viewport{
   position:relative;
-  flex:1 1 auto;
+  flex:1;
   min-height:0;
   display:flex;
   align-items:center;
   justify-content:center;
   overflow:hidden;
   background:#000;
+  max-height: calc(100% - 80px); /* to match controls height */
 }
 #player-stage{
   position:relative;
@@ -527,6 +528,7 @@ body{font-family:'Nunito',sans-serif;background:var(--bg);color:var(--text);min-
   position:absolute;
   top:0;
   left:0;
+  height: 80px;
   width:100%;
   box-sizing:border-box;
   padding:0 var(--control-pad-inline);
@@ -2044,7 +2046,7 @@ input[type=range]#seek-bar::-webkit-slider-thumb{appearance:none;width:14px;heig
     pip.style.width  = Math.min(Math.max(width,  b.minWidth),  b.maxWidth)  + 'px';
     pip.style.height = Math.min(Math.max(height, b.minHeight), b.maxHeight) + 'px';
     applyPipPosition(x, y);
-    
+
   };
 
   window.syncPipBounds = syncPipBounds;
