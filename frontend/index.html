@@ -1036,8 +1036,10 @@
       }
       .video-surface {
         display: block;
+        position: relative;
         width: 100%;
         height: 100%;
+        z-index: 1;
         object-fit: contain;
         background: #000;
       }
@@ -1297,7 +1299,7 @@
         right: 14px; /* default in right */
         top: 50%;
         transform: translateY(-50%);
-        z-index: 14;
+        z-index: 12;
         display: flex;
         flex-direction: column;
         gap: 10px;
@@ -1455,18 +1457,27 @@
         transition:
           opacity 0.25s ease,
           transform 0.25s ease;
-        pointer-events: all;
+        pointer-events: none;
         will-change: opacity, transform;
         overflow: hidden;
       }
 
       .ctrl-bar > * {
-        width: min(100%, 1120px);
+        width: min(100%, 1100px);
         margin-inline: auto;
+      }
+      .ctrl-bar {
+        cursor: default;
+      }
+      .ctrl-bar button {
+        cursor: pointer;
+      }
+      .ctrl-bar * {
+        pointer-events: auto;
       }
       .ctrl-bar.ctrl-hidden {
         opacity: 0;
-        transform: translateY(18px);
+        transform: translateY(12px);
         pointer-events: none;
       }
 
@@ -1552,11 +1563,11 @@
         color: rgba(255, 255, 255, 0.35);
       }
       .ctrl-row {
-        position: relative;
         display: flex;
         align-items: center;
-        justify-content: start;
+        justify-content: space-between;
         gap: 12px;
+        flex-wrap: wrap;
         min-height: 52px;
         z-index: 10;
       }
@@ -1567,14 +1578,14 @@
         min-width: 0;
       }
       .ctrl-cluster--transport {
-        position: absolute;
-        left: 50%;
-        transform: translateX(-50%);
-        justify-content: center;
+        display: flex;
+        flex-wrap: nowrap;
+        align-items: center;
+        gap: 12px;
       }
       .ctrl-cluster--meta {
-        flex: 0 0 auto;
-        margin-left: auto;
+        display: flex;
+        align-items: center;
         gap: 12px;
         flex-wrap: wrap;
         justify-content: flex-end;
@@ -1715,9 +1726,6 @@
       }
       .ctrl-bar[data-layout="compact"] .ctrl-cluster--transport,
       .ctrl-bar[data-layout="stacked"] .ctrl-cluster--transport {
-        position: static;
-        left: auto;
-        transform: none;
         justify-content: center;
       }
       .ctrl-bar[data-layout="compact"] .ctrl-cluster--meta,
@@ -2129,15 +2137,23 @@
       #yt-player-wrap {
         position: absolute;
         inset: 0;
+        width: 100%;
+        height: 100%;
         z-index: 1;
         background: #000;
-        display: none;
-        pointer-events: all;
+        opacity: 0;
+        pointer-events: none;
+        transition: opacity 0.2s ease;
       }
       #yt-player-wrap.active {
-        display: block;
+        opacity: 1;
+        pointer-events: auto;
       }
       #yt-player {
+        width: 100%;
+        height: 100%;
+      }
+      #yt-player iframe {
         width: 100%;
         height: 100%;
       }
@@ -2952,8 +2968,6 @@
                         keyboard_double_arrow_right
                       </span>
                     </button>
-                  </div>
-                  <div class="ctrl-cluster ctrl-cluster--meta">
                     <div class="ctrl-volume">
                       <svg
                         width="16"
@@ -2976,6 +2990,8 @@
                         value="0.8"
                       />
                     </div>
+                  </div>
+                  <div class="ctrl-cluster ctrl-cluster--meta">
                     <div class="sync-chip">
                       <div class="chip-dot ok"></div>
                       <span id="sync-chip-label">synced</span>
@@ -3453,6 +3469,11 @@
         }
       }
 
+      function resetControlsTimer(delay = INACTIVITY_DELAY_MS) {
+        showControls();
+        startInactivityTimer(delay);
+      }
+
       function hideControls() {
         // Never hide if the user is still hovering / clicking / dragging controls.
         if (isControlInteractionActive()) return;
@@ -3544,7 +3565,7 @@
         () => {
           if (!isWatchActive()) return;
           handleHoverOverlay();
-          showControls();
+          resetControlsTimer();
         },
         { passive: true },
       );
@@ -3553,7 +3574,7 @@
         () => {
           if (!isWatchActive()) return;
           handleHoverOverlay();
-          showControls();
+          resetControlsTimer();
         },
         { passive: true },
       );
@@ -3631,17 +3652,22 @@
       }
 
       // Track hover + active input on ctrl-bar so we never hide mid-interaction.
-      cbar?.addEventListener("mouseenter", () => {
+      cbar?.addEventListener("pointerover", (event) => {
+        if (cbar.contains(event.relatedTarget)) return;
         isHoveringCtrl = true;
         clearInactivityTimer();
       });
-      cbar?.addEventListener("mouseleave", () => {
+      cbar?.addEventListener("pointerout", (event) => {
+        if (cbar.contains(event.relatedTarget)) return;
         isHoveringCtrl = false;
         // Restart the full inactivity timer when cursor leaves the bar
         if (!isInteractingWithControls && isCurrentlyPlaying())
           startInactivityTimer();
       });
       cbar?.addEventListener("pointerdown", handleControlInteractionStart);
+      cbar?.addEventListener("click", () => {
+        resetControlsTimer();
+      });
       document.addEventListener("pointerup", handleControlInteractionEnd);
       document.addEventListener("pointercancel", handleControlInteractionEnd);
       document.addEventListener("pointerup", () => {
@@ -3657,6 +3683,11 @@
 
       // ── Play/pause wiring ──────────────────────────────────────────────────
 
+      mov.addEventListener("play", resetControlsTimer);
+      mov.addEventListener("pause", showControls);
+      mov.addEventListener("touchstart", resetControlsTimer, {
+        passive: true,
+      });
       mov.addEventListener("play", onPlayStateChange);
       mov.addEventListener("pause", onPlayStateChange);
 
@@ -4306,7 +4337,7 @@
         user-select: none;
       "
     >
-      V0.10.2
+      V0.10.3
     </div>
   </body>
 </html>

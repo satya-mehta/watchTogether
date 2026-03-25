@@ -150,7 +150,7 @@ export class Chat {
   /** Programmatically open the chat panel. */
   open() {
     if (this._open) return;
-    this._openPanel();
+    void this._openPanel();
   }
 
   /** Programmatically close the chat panel. */
@@ -250,7 +250,7 @@ export class Chat {
   _wireEvents() {
     // Toggle open/close on chat button
     this._chatToggleBtn?.addEventListener('click', () => {
-      this._open ? this._closePanel() : this._openPanel();
+      this._open ? this._closePanel() : void this._openPanel();
     });
 
     // Send on button click
@@ -276,14 +276,23 @@ export class Chat {
       if (!watchActive) return;
       if ((e.ctrlKey || e.metaKey) && e.shiftKey && e.key === 'C') {
         e.preventDefault();
-        this._open ? this._closePanel() : this._openPanel();
+        this._open ? this._closePanel() : void this._openPanel();
       }
     });
   }
 
   // ── Panel open / close ────────────────────────────────────────────────────
 
-  _openPanel() {
+  async _openPanel() {
+    if (document.fullscreenElement) {
+      try {
+        await document.exitFullscreen();
+      } catch {
+        // If fullscreen exit is blocked, continue opening chat rather than
+        // leaving the toggle unresponsive.
+      }
+    }
+
     this._open = true;
     this._panel?.classList.add('open');
     this._watchScreen?.classList.add('chat-open');
@@ -296,6 +305,8 @@ export class Chat {
     requestAnimationFrame(() => {
       this._scrollToBottom(true);
       this._boundSyncLayout();
+      document.getElementById('player-shell')
+        ?.scrollIntoView({ behavior: 'smooth', block: 'center' });
     });
     // Focus input
     setTimeout(() => this._input?.focus(), 300);
