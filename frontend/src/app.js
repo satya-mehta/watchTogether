@@ -1727,10 +1727,7 @@ function leaveRoomAndGoHome(message = '') {
   setSignalingState('disconnected');
   showCallUI(false);
   client?.disconnect();
-  // Reset wiring flag so controls re-register correctly if user creates a new room
-  videoControlsWired = false;
-  reactionsWired = false;
-  ytLobbyWired = false;
+
   lastAppliedSyncState = null;
   lastSentPlayPauseCommand = null;
   resetToLanding(message);
