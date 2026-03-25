@@ -1463,7 +1463,8 @@
       }
 
       .ctrl-bar > * {
-        width: min(100%, 1100px);
+        width: 100%;
+        max-width: 1100px;
         margin-inline: auto;
       }
       .ctrl-bar {
@@ -1567,7 +1568,8 @@
         align-items: center;
         justify-content: space-between;
         gap: 12px;
-        flex-wrap: wrap;
+        flex-wrap: nowrap;
+        overflow: hidden;
         min-height: 52px;
         z-index: 10;
       }
@@ -1582,12 +1584,15 @@
         flex-wrap: nowrap;
         align-items: center;
         gap: 12px;
+        min-width: 0;
+        flex-shrink: 1;
       }
       .ctrl-cluster--meta {
         display: flex;
         align-items: center;
         gap: 12px;
-        flex-wrap: wrap;
+        flex-wrap: nowrap;
+        flex-shrink: 0;
         justify-content: flex-end;
       }
       .ctrl-volume {
@@ -1719,33 +1724,20 @@
       }
       .ctrl-bar[data-layout="compact"] .ctrl-row,
       .ctrl-bar[data-layout="stacked"] .ctrl-row {
-        flex-direction: column;
-        align-items: stretch;
-        justify-content: flex-start;
-        min-height: 0;
+        flex-direction: row;
+        align-items: center;
+        justify-content: space-between;
+        min-height: 52px;
       }
       .ctrl-bar[data-layout="compact"] .ctrl-cluster--transport,
       .ctrl-bar[data-layout="stacked"] .ctrl-cluster--transport {
-        justify-content: center;
+        justify-content: flex-start;
       }
       .ctrl-bar[data-layout="compact"] .ctrl-cluster--meta,
       .ctrl-bar[data-layout="stacked"] .ctrl-cluster--meta {
-        width: 100%;
+        width: auto;
         margin-left: 0;
-        justify-content: space-between;
-      }
-      .ctrl-bar[data-layout="compact"] .track-row,
-      .ctrl-bar[data-layout="stacked"] .track-row {
-        grid-template-columns: 1fr;
-        max-width: none;
-      }
-      .ctrl-bar[data-layout="stacked"] .ctrl-cluster--meta {
-        justify-content: center;
-        gap: 10px;
-      }
-      .ctrl-bar[data-layout="stacked"] .sync-chip {
-        flex: 1 1 auto;
-        justify-content: center;
+        justify-content: flex-end;
       }
 
       /* Call controls strip (mute / camera / end) */
@@ -1816,7 +1808,7 @@
             calc(16px + env(safe-area-inset-bottom, 0px));
         }
         .ctrl-row {
-          gap: 10px;
+          gap: 8px;
         }
         .track-row {
           grid-template-columns: 1fr;
