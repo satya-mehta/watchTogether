@@ -201,6 +201,10 @@ export class VideoCall extends EventTarget {
     this._makingOffer = false;
     this._iceRestartCount = 0;
 
+    this._startPromise = null;
+    this._signalQueue = [];
+    this._processingQueue = false;
+
     // ── Adaptive quality state ──────────────────────────────────────────
     this._currentTier = 'high';
     this._qualityPollTimer = null;
@@ -219,27 +223,38 @@ export class VideoCall extends EventTarget {
   // ── Public API ────────────────────────────────────────────────────────
 
   async start(isInitiator = false) {
-    this.isInitiator = isInitiator;
-    this._started = true;
-    this.localStream = new MediaStream();
-    await this.ensureMedia({
-      audio: true,
-      video: true,
-      reason: 'start',
-      emitFailureEvents: true,
-    });
-    this._attachLocalPreview();
-    document.addEventListener('visibilitychange', this._boundVisibilityMediaRetry, true);
+    if (this._startPromise) return this._startPromise;
 
-    this._createPeerConnection();
-    this._armRemoteStreamWatchdog();
-    this._emit('started', { hasVideo: this.hasVideo, hasAudio: this.hasAudio });
-    this._emit('show_pip');
-    if (this.isInitiator) {
-      queueMicrotask(() => {
-        if (this._started && this.pc) this._createOffer();
+    this.isInitiator = isInitiator;
+
+    this._startPromise = (async () => {
+      this._started = true;
+      this.localStream = new MediaStream();
+
+      await this.ensureMedia({
+        audio: true,
+        video: true,
+        reason: 'start',
+        emitFailureEvents: true,
       });
-    }
+
+      this._attachLocalPreview();
+      document.addEventListener('visibilitychange', this._boundVisibilityMediaRetry, true);
+
+      this._createPeerConnection(); //  NOW inside promise
+      this._armRemoteStreamWatchdog();
+
+      this._emit('started', { hasVideo: this.hasVideo, hasAudio: this.hasAudio });
+      this._emit('show_pip');
+
+      if (this.isInitiator) {
+        queueMicrotask(() => {
+          if (this._started && this.pc) this._createOffer();
+        });
+      }
+    })();
+
+    return this._startPromise;
   }
 
   toggleMute() {
@@ -348,6 +363,11 @@ export class VideoCall extends EventTarget {
 
   end() {
     this._stopQualityMonitor();
+    // -- clean up queue and promises on call end --
+    this._startPromise = null;
+    this._signalQueue = [];
+    this._processingQueue = false;
+    this._pendingCandidates = [];
     this._unsubscribeClientEvents.forEach(u => { try { u(); } catch { } });
     this._unsubscribeClientEvents = [];
     clearTimeout(this._remoteStreamTimer);
@@ -380,6 +400,7 @@ export class VideoCall extends EventTarget {
     document.removeEventListener('fullscreenchange', this._boundRemotePlaybackRetry, true);
     this._emit('ended');
     console.log('[WebRTC] Call ended');
+    this._started = false;
   }
 
   // ── Peer connection setup ─────────────────────────────────────────────
@@ -639,13 +660,59 @@ export class VideoCall extends EventTarget {
 
   // ── Incoming signal handler ───────────────────────────────────────────
 
+  // ── Incoming signal handler ───────────────────────────────────────────
+
+  // --- CHANGED: Replaced direct processing with a queueing system ---
   async _onSignal(signal) {
     if (!signal) return;
 
+    // ✅ FIX 1: Start on ANY first signal (not just offer)
+    if (!this._started) {
+      this.start(signal.type === 'offer' ? false : this.isInitiator);
+    }
+
+    // Push to queue
+    this._signalQueue.push(signal);
+
+    // Trigger processing
+    this._processSignalQueue();
+  }
+
+  async _processSignalQueue() {
+    // Prevent concurrent loops
+    if (this._processingQueue) return;
+    this._processingQueue = true;
+    try {
+      // ✅ FIX 2: Microtask gap to allow start() to set _startPromise
+      if (!this._startPromise) {
+        await Promise.resolve();
+      }
+
+      // Now safely wait for initialization
+      if (this._startPromise) {
+        await this._startPromise;
+      }
+
+      // Process signals in order
+      while (this._signalQueue.length > 0) {
+        const signal = this._signalQueue.shift();
+        try {
+          await this._handleSignal(signal);
+        } catch (err) {
+          console.error('[WebRTC] Signal processing error:', err);
+        }
+      }
+    } finally {
+      this._processingQueue = false;
+    }
+
+    this._processingQueue = false;
+  }
+
+  async _handleSignal(signal) {
     switch (signal.type) {
       case 'offer':
         console.log('[WebRTC] Received offer');
-        if (!this._started) await this.start(false);
         {
           const collision = this._makingOffer || this.pc?.signalingState !== 'stable';
           if (collision) {
@@ -681,6 +748,7 @@ export class VideoCall extends EventTarget {
         break;
     }
   }
+  // ------------------------------------------------------------------
 
   async _flushPendingCandidates() {
     for (const c of this._pendingCandidates) {
