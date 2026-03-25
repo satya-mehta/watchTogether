@@ -2764,11 +2764,15 @@ function wireReactions() {
 }
 
 function spawnFloatingReaction(emoji) {
+  const playerShell = document.getElementById('player-shell');
+  const fullscreenRoot = document.fullscreenElement === playerShell ? playerShell : null;
+  const host = fullscreenRoot || document.body;
+  const positionMode = fullscreenRoot ? 'absolute' : 'fixed';
   const el = document.createElement('div');
   el.className = 'floating-reaction';
   el.textContent = emoji;
   el.style.cssText = `
-    position: fixed;
+    position: ${positionMode};
     bottom: 80px;
     left: ${15 + Math.random() * 60}%;
     font-size: 32px;
@@ -2776,7 +2780,7 @@ function spawnFloatingReaction(emoji) {
     z-index: 9999;
     animation: floatUp 2.5s ease-out forwards;
   `;
-  document.body.appendChild(el);
+  host.appendChild(el);
   setTimeout(() => el.remove(), 2600);
 }
 

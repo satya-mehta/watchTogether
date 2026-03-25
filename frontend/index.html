@@ -1306,6 +1306,9 @@
         max-height: min(60%, calc(100% - 56px));
         overflow-y: auto;
         overflow-x: hidden;
+        -webkit-overflow-scrolling: touch;
+        touch-action: pan-y;
+        overscroll-behavior: contain;
         padding: 4px 0;
         pointer-events: all;
         transition:
@@ -1315,6 +1318,9 @@
           transform 0.25s ease;
         scrollbar-width: none;
         -ms-overflow-style: none;
+      }
+      .reactions {
+        scroll-behavior: smooth;
       }
       .reactions::-webkit-scrollbar {
         display: none;
@@ -1330,6 +1336,7 @@
         justify-content: center;
         font-size: 18px;
         cursor: pointer;
+        touch-action: manipulation;
         transition:
           transform 0.15s,
           background 0.2s,
@@ -2922,7 +2929,9 @@
               </div>
               <div id="player-hover-layer" aria-hidden="true"></div>
               <!-- Master badge -->
-              <div class="master-badge" id="master-badge">You · controlling</div>
+              <div class="master-badge" id="master-badge">
+                You · controlling
+              </div>
 
               <!-- Reactions -->
               <div class="reactions">
@@ -3566,7 +3575,8 @@
 
       watchScreen?.addEventListener(
         "touchstart",
-        () => {
+        (e) => {
+          if (e.target?.closest?.(".reactions")) return;
           if (!isWatchActive()) return;
           handleHoverOverlay();
           resetControlsTimer();
@@ -3575,7 +3585,8 @@
       );
       hoverLayer?.addEventListener(
         "touchstart",
-        () => {
+        (e) => {
+          if (e.target?.closest?.(".reactions")) return;
           if (!isWatchActive()) return;
           handleHoverOverlay();
           resetControlsTimer();
@@ -4341,7 +4352,7 @@
         user-select: none;
       "
     >
-      V0.10.3
+      V0.10.5
     </div>
   </body>
 </html>
