@@ -10,6 +10,7 @@ import {
 
 // ── Config ────────────────────────────────────────────────────────────────
 const APP_CONFIG = window.WATCH_TOGETHER_CONFIG ?? {};
+const DEV_MODE = location.search.includes('dev=player');
 
 function normalizeBaseUrl(value) {
   return typeof value === 'string' ? value.trim().replace(/\/+$/g, '') : '';
@@ -3297,6 +3298,113 @@ function setRoomModeUI(mode, sendWs = true) {
   }
 }
 
+function createDevClientStub() {
+  return {
+    participantId: '__dev_participant__',
+    peerId: '__dev_peer__',
+    setPositionGetter() { },
+    setReady() { },
+    fileReady() { },
+    playPause() { },
+    seek() { },
+    react() { },
+    returnToLobby() { },
+    disconnect() { },
+    updateName() { },
+    syncMediaState() { },
+    sendMicToggle() { },
+    sendCameraToggle() { },
+    requestSyncCheck() { },
+    sendSignal() { },
+    join() { },
+    connect: async () => { },
+    on() { },
+    listen() { return () => { }; },
+    _send() { },
+  };
+}
+
+async function enterDevPlayerMode(options = {}) {
+  const {
+    mode = 'local',
+    videoSrc = '',
+    ytId = '',
+    showPip = true,
+  } = options;
+
+  if (!client) client = createDevClientStub();
+  if (!videoControlsWired) wireVideoControls();
+  if (!reactionsWired) wireReactions();
+  wireYouTubeLobby();
+
+  setActiveScreen('watch');
+  setSignalingState('disconnected');
+  setPresenceState('offline');
+  setCallState('idle');
+
+  const video = document.getElementById('movie-video');
+  const ytWrap = document.getElementById('yt-player-wrap');
+  const pipBubble = document.getElementById('pip-bubble');
+  const remoteName = document.getElementById('remote-name-chip');
+  const syncLabel = document.getElementById('sync-chip-label');
+  const syncDot = document.querySelector('.sync-chip .chip-dot');
+
+  if (mode === 'youtube') {
+    video?.pause();
+    video?.removeAttribute('src');
+    video?.load?.();
+    ytWrap?.classList.add('active');
+    setRoomModeUI('youtube', false);
+    if (ytId) {
+      try {
+        await processYtUrl(ytId, { broadcast: false });
+      } catch (err) {
+        console.warn('[dev player] YouTube load failed:', err?.message || err);
+      }
+    }
+  } else {
+    setRoomModeUI('local', false);
+    ytWrap?.classList.remove('active');
+    ytPlayer?.pauseVideo?.();
+    stopYtPolling();
+    clearYtVideoSelection();
+    if (video) {
+      if (videoSrc) video.src = videoSrc;
+      video.play().catch(() => { });
+    }
+  }
+
+  if (syncLabel) syncLabel.textContent = 'synced';
+  syncDot?.classList.add('ok');
+  remoteName && (remoteName.textContent = 'DEV CAM');
+
+  if (pipBubble) {
+    pipBubble.style.display = showPip ? 'block' : 'none';
+    if (typeof window.setPipOverlayVisibility === 'function') {
+      window.setPipOverlayVisibility(showPip);
+    }
+    if (showPip) {
+      window.resetPipPosition?.();
+      window.syncPipBounds?.();
+    }
+  } else if (showPip && !document.querySelector('.pip-bubble')) {
+    const pip = document.createElement('div');
+    pip.className = 'pip-bubble';
+    pip.style.top = '20px';
+    pip.style.left = '20px';
+    pip.innerHTML = "<div style='color:white;padding:10px'>DEV CAM</div>";
+    document.body.appendChild(pip);
+  }
+
+  window.requestAnimationFrame(() => {
+    window.syncPlayerLayout?.();
+    window.syncPipBounds?.();
+  });
+}
+
+window.loadYouTubeVideo = (ytId) => processYtUrl(ytId, { broadcast: false });
+window.devPlayer = enterDevPlayerMode;
+
 // ── Friend card dynamic content ───────────────────────────────────────────
 function updateFriendCardForMode(mode) {
   const section = document.getElementById('friend-file-section');
@@ -3482,5 +3590,20 @@ async function processYtUrl(videoId, { broadcast = true } = {}) {
   }
 }
 
-void wakeBackend();
-autoJoinFromPath();
+if (DEV_MODE) {
+  const params = new URLSearchParams(location.search);
+  const mode = params.get('mode') || 'local';
+  const ytId = params.get('yt') || '';
+  const videoSrc = params.get('video') || 'sample.mp4';
+  const pip = params.get('pip') !== '0';
+
+  void enterDevPlayerMode({
+    mode,
+    ytId,
+    videoSrc,
+    showPip: pip,
+  });
+} else {
+  void wakeBackend();
+  autoJoinFromPath();
+}
