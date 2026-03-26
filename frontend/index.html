@@ -1341,6 +1341,14 @@
           transform 0.15s,
           background 0.2s,
           border-color 0.2s;
+        flex: 0 0 auto;
+      }
+      .reactions { /*added for better scroll smoothness*/
+        scroll-snap-type: y proximity;
+      }
+
+      .react-btn {
+        scroll-snap-align: start;
       }
       .react-btn:hover {
         transform: scale(1.25) rotate(-5deg);
@@ -1361,6 +1369,7 @@
           overflow-y: auto;
           overflow-x: hidden;
           padding: 4px 0;
+          -webkit-overflow-scrolling: touch;
         }
       }
 

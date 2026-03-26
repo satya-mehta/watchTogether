@@ -94,6 +94,72 @@ npx http-server -p 3000
 
 Then open `http://localhost:3000` and point `config.js` to `http://localhost:3001`.
 
+## Developer testing routes
+
+The frontend includes a **developer-only player testing mode** that is enabled only when the URL includes `?dev=player`. Normal room creation, joining, sync, and WebRTC flows stay unchanged unless that flag is present.
+
+Use these routes while running the frontend locally:
+
+- `?dev=player`
+  Opens the watch screen immediately in **local video mode**.
+  Default local video source: `sample.mp4`
+  Fake PiP: enabled
+
+- `?dev=player&video=test.mp4`
+  Opens the watch screen in **local video mode** and loads a custom local video URL/path into `#movie-video`.
+
+- `?dev=player&mode=youtube&yt=dQw4w9WgXcQ`
+  Opens the watch screen in **YouTube mode** and loads the given YouTube video ID using the existing YouTube player flow.
+
+- `?dev=player&pip=0`
+  Opens player dev mode but hides the PiP bubble so layout can be tested without the call overlay.
+
+- `?dev=player&mode=youtube&yt=dQw4w9WgXcQ&pip=0`
+  Useful when testing fullscreen and control layout in YouTube mode without PiP.
+
+### Supported query parameters
+
+- `dev=player`
+  Required flag that enables dev player mode.
+
+- `mode=local|youtube`
+  Chooses which player mode to enter.
+  Default: `local`
+
+- `video=<path-or-url>`
+  Local video source used in local mode.
+  Default: `sample.mp4`
+
+- `yt=<youtube-video-id>`
+  YouTube video ID used in YouTube mode.
+  Example: `dQw4w9WgXcQ`
+
+- `pip=0`
+  Disables the PiP bubble in dev mode.
+  Any other value, or omission, keeps PiP visible.
+
+### Console helper
+
+Dev mode also exposes a browser console helper:
+
+```js
+window.devPlayer({ mode: 'local', videoSrc: 'sample.mp4', showPip: true });
+window.devPlayer({ mode: 'youtube', ytId: 'dQw4w9WgXcQ', showPip: false });
+```
+
+There is also a convenience loader for YouTube-only testing:
+
+```js
+window.loadYouTubeVideo('dQw4w9WgXcQ');
+```
+
+### Notes
+
+- Dev mode is URL-gated and does **not** run unless `?dev=player` is present.
+- It uses a local no-op client stub so the player UI can be exercised without creating a room.
+- The watch screen is opened directly, the sync chip is forced to `synced`, and PiP can be shown or hidden for layout testing.
+- If the YouTube API or video load fails, the app logs a warning to the console instead of crashing the normal app flow.
+
 ## How it works
 
 ### Local file mode (default)
