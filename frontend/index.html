@@ -1362,17 +1362,25 @@
         .reactions {
           left: auto;
           right: 14px;
-          top: 35px;
-          bottom: 150px;
-          transform: none;
-          /* transform: translateY(-50%); */
+
+          /* 1. Anchoring */
+          top: auto; /* Resets the global top: 50% */
+          bottom: 165px; /* Positions the bottom edge exactly above the timeline */
+          transform: none; /* Removes the global centering transform */
+
+          /* 2. Layout & Scroll Fix */
           display: flex;
           flex-direction: column;
           align-items: center;
-          justify-content: flex-end;
+          justify-content: flex-start; /* Fixes the hidden emoji and scroll bug */
           gap: 8px;
-          /* max-height: calc(100% - 100px); */
-          max-height: none;
+
+          /* 3. Dynamic Height */
+          /* Limits height so it stays within the visible area */
+          max-height: calc(100dvh - 180px);
+          height: auto;
+
+          /* 4. Behavior */
           overflow-y: auto;
           overflow-x: hidden;
           scrollbar-width: none;
