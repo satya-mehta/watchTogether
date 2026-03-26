@@ -1006,10 +1006,6 @@
         margin: 0;
       }
 
-      #player-shell:fullscreen * {
-        transform: none !important;
-      }
-
       #player-shell:-webkit-full-screen {
         position: fixed;
         inset: 0;
@@ -1366,13 +1362,14 @@
         .reactions {
           left: auto;
           right: 14px;
-          top: 50%;
-          transform: translateY(-50%);
+          top: auto;
+          bottom: 120px;
+          /* transform: translateY(-50%); */
           flex-direction: column;
           align-items: center;
           justify-content: flex-start;
           gap: 10px;
-          max-height: min(60%, calc(100% - 56px));
+          max-height: calc(100% - 140px);
           overflow-y: auto;
           overflow-x: hidden;
           padding: 4px 0;
