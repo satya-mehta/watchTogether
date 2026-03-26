@@ -1621,7 +1621,11 @@ function getPeerDisplayName() {
 }
 
 async function ensureVideoCall({ force = false } = {}) {
-  if (!client || call || callStarting) return call;
+  if (!client) return call;
+  if (callStarting && !force) return call;
+  if (!force && call && isIceConnected(call.iceState)) {
+    return call;
+  }
   if (!force && appState.presenceState !== 'online') return null;
   callStarting = true;
   setCallState('connecting');
@@ -1932,6 +1936,14 @@ function wireClientEvents() {
   });
 
   client.on('joined', (data) => {
+    const me = data.peers.find(p =>
+      p.participantId === client.participantId ||
+      p.peerId === data.yourPeerId
+    );
+
+    if (me) {
+      isHost = !!me.isHost;
+    }
     console.log('Joined room', data.roomCode, 'as', data.yourPeerId);
     rememberParticipantName(client?.participantId, myName);
     chat.setMyParticipantId(client?.participantId || null);
@@ -2012,12 +2024,40 @@ function wireClientEvents() {
   });
 
   client.on('peer_reconnected', (data) => {
+    // Prevent rapid duplicate reconnect handling
+    if (window.__reconnectLock) return;
+    window.__reconnectLock = true;
+    setTimeout(() => window.__reconnectLock = false, 1500);
+
     addPeerToUI(data);
+
+    // Destroy stale call (IMPORTANT for DTLS reset)
+    if (call) {
+      console.log('[WebRTC] Restarting call after peer rejoin');
+      try {
+        call.end();
+      } catch (e) {
+        console.warn('Error ending call', e);
+      }
+      call = null;
+      callStarting = false;
+    }
+
+    // Only one side should initiate (avoid double-offer)
+    const shouldInitiate = isHost;
+
+    if (shouldInitiate) {
+      ensureVideoCall({ force: true });
+    } else {
+      console.log('[WebRTC] Waiting for host to initiate');
+    }
+
     handleRecovery({
       message: 'Connected again',
-      requestResume: true,
+      requestResume: false,
       delayMs: RESUME_AFTER_RECOVERY_DELAY_MS,
     });
+
     queueMediaSync('peer-reconnected');
     flushQueuedMediaSync();
   });
